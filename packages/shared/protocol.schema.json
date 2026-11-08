@@ -1,0 +1,453 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://meeting-recorder.local/protocol.schema.json",
+  "title": "Protocol",
+  "description": "Single source of truth for agent <-> daemon NDJSON messages. Bump x-protocolVersion on any breaking change, then run `npm run gen:protocol`. Root properties exist only so codegen emits one named type per message; AgentEvent/DaemonCommand are the real unions, decoded by `type` / `cmd`.",
+  "type": "object",
+  "properties": {
+    "helloEvent": {
+      "$ref": "#/definitions/HelloEvent"
+    },
+    "micEvent": {
+      "$ref": "#/definitions/MicEvent"
+    },
+    "recordingEvent": {
+      "$ref": "#/definitions/RecordingEvent"
+    },
+    "trayEvent": {
+      "$ref": "#/definitions/TrayEvent"
+    },
+    "powerEvent": {
+      "$ref": "#/definitions/PowerEvent"
+    },
+    "permissionEvent": {
+      "$ref": "#/definitions/PermissionEvent"
+    },
+    "startCommand": {
+      "$ref": "#/definitions/StartCommand"
+    },
+    "stopCommand": {
+      "$ref": "#/definitions/StopCommand"
+    },
+    "stateCommand": {
+      "$ref": "#/definitions/StateCommand"
+    },
+    "openUrlCommand": {
+      "$ref": "#/definitions/OpenUrlCommand"
+    }
+  },
+  "definitions": {
+    "AgentEvent": {
+      "description": "Agent -> daemon. One JSON object per line on the daemon's stdin.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/HelloEvent"
+        },
+        {
+          "$ref": "#/definitions/MicEvent"
+        },
+        {
+          "$ref": "#/definitions/RecordingEvent"
+        },
+        {
+          "$ref": "#/definitions/TrayEvent"
+        },
+        {
+          "$ref": "#/definitions/PowerEvent"
+        },
+        {
+          "$ref": "#/definitions/PermissionEvent"
+        }
+      ],
+      "discriminator": {
+        "propertyName": "type"
+      }
+    },
+    "DaemonCommand": {
+      "description": "Daemon -> agent. One JSON object per line on the daemon's stdout.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/StartCommand"
+        },
+        {
+          "$ref": "#/definitions/StopCommand"
+        },
+        {
+          "$ref": "#/definitions/StateCommand"
+        },
+        {
+          "$ref": "#/definitions/OpenUrlCommand"
+        }
+      ],
+      "discriminator": {
+        "propertyName": "cmd"
+      }
+    },
+    "HelloEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocolVersion",
+        "agentVersion",
+        "platform"
+      ],
+      "properties": {
+        "type": {
+          "const": "hello"
+        },
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "agentVersion": {
+          "type": "string"
+        },
+        "platform": {
+          "$ref": "#/definitions/Platform"
+        },
+        "activeMeetingId": {
+          "$ref": "#/definitions/MeetingId",
+          "description": "Meeting the agent is recording right now (daemon restarted mid-recording). Omitted when idle."
+        }
+      }
+    },
+    "MicEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "users",
+        "windows"
+      ],
+      "description": "Sent whenever the set of other apps using a microphone, or their meeting-relevant window titles, changes.",
+      "properties": {
+        "type": {
+          "const": "mic"
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/MicUser"
+          }
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WindowInfo"
+          }
+        }
+      }
+    },
+    "MicUser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundleId",
+        "pid"
+      ],
+      "properties": {
+        "bundleId": {
+          "type": "string"
+        },
+        "pid": {
+          "type": "integer"
+        }
+      }
+    },
+    "WindowInfo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bundleId",
+        "title"
+      ],
+      "properties": {
+        "bundleId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      }
+    },
+    "RecordingEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "state",
+        "meetingId"
+      ],
+      "properties": {
+        "type": {
+          "const": "recording"
+        },
+        "state": {
+          "$ref": "#/definitions/RecordingState"
+        },
+        "meetingId": {
+          "$ref": "#/definitions/MeetingId"
+        },
+        "durationSec": {
+          "type": "number",
+          "minimum": 0
+        },
+        "error": {
+          "$ref": "#/definitions/AgentError"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "error"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "stopped"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "durationSec"
+            ]
+          }
+        }
+      ]
+    },
+    "AgentError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "$ref": "#/definitions/AgentErrorCode"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "TrayEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "action"
+      ],
+      "properties": {
+        "type": {
+          "const": "tray"
+        },
+        "action": {
+          "$ref": "#/definitions/TrayAction"
+        }
+      }
+    },
+    "PowerEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "state"
+      ],
+      "properties": {
+        "type": {
+          "const": "power"
+        },
+        "state": {
+          "$ref": "#/definitions/PowerState"
+        }
+      }
+    },
+    "PermissionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "screen"
+      ],
+      "properties": {
+        "type": {
+          "const": "permission"
+        },
+        "screen": {
+          "$ref": "#/definitions/PermissionState"
+        }
+      }
+    },
+    "StartCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cmd",
+        "meetingId",
+        "path",
+        "height",
+        "fps"
+      ],
+      "properties": {
+        "cmd": {
+          "const": "start"
+        },
+        "meetingId": {
+          "$ref": "#/definitions/MeetingId"
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/.+/recording\\.mp4$",
+          "description": "Absolute path of recording.mp4 to create, inside the meetings folder."
+        },
+        "height": {
+          "type": "integer",
+          "enum": [
+            720,
+            1080
+          ]
+        },
+        "fps": {
+          "type": "integer",
+          "enum": [
+            10,
+            15,
+            30
+          ]
+        }
+      }
+    },
+    "StopCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cmd",
+        "meetingId"
+      ],
+      "properties": {
+        "cmd": {
+          "const": "stop"
+        },
+        "meetingId": {
+          "$ref": "#/definitions/MeetingId"
+        }
+      }
+    },
+    "StateCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cmd",
+        "status"
+      ],
+      "properties": {
+        "cmd": {
+          "const": "state"
+        },
+        "status": {
+          "$ref": "#/definitions/AgentStatus"
+        },
+        "label": {
+          "type": "string",
+          "description": "Short text for the menu, e.g. 'Recording Zoom' or 'Run meeting-recorder update'."
+        }
+      }
+    },
+    "OpenUrlCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cmd",
+        "url"
+      ],
+      "properties": {
+        "cmd": {
+          "const": "openUrl"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^http://127\\.0\\.0\\.1:[0-9]{1,5}/",
+          "description": "Only the local dashboard may be opened. The daemon opens folders itself."
+        }
+      }
+    },
+    "RecordingState": {
+      "type": "string",
+      "enum": [
+        "started",
+        "stopped",
+        "error"
+      ]
+    },
+    "PowerState": {
+      "type": "string",
+      "enum": [
+        "suspend",
+        "resume",
+        "ac",
+        "battery"
+      ]
+    },
+    "TrayAction": {
+      "type": "string",
+      "enum": [
+        "toggle",
+        "openDashboard",
+        "openFolder",
+        "quit"
+      ]
+    },
+    "AgentErrorCode": {
+      "type": "string",
+      "enum": [
+        "permission",
+        "capture",
+        "writer",
+        "unknown"
+      ]
+    },
+    "AgentStatus": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "starting",
+        "recording",
+        "stopping",
+        "warning"
+      ]
+    },
+    "PermissionState": {
+      "type": "string",
+      "enum": [
+        "granted",
+        "denied"
+      ]
+    },
+    "Platform": {
+      "type": "string",
+      "enum": [
+        "macos"
+      ]
+    },
+    "MeetingId": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}_[a-z0-9-]{1,40}$",
+      "description": "Meeting folder name: <local date>_<local time>_<slug>. Safe as a single path component."
+    }
+  },
+  "x-protocolVersion": 1
+}

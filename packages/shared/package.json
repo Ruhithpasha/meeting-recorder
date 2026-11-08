@@ -1,0 +1,11 @@
+{
+  "name": "@meeting-recorder/shared",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./protocol.schema.json": "./protocol.schema.json" },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": { "ajv": "^8.20.0" }
+}

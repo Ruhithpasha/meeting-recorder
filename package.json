@@ -1,0 +1,27 @@
+{
+  "name": "meeting-recorder",
+  "private": true,
+  "type": "module",
+  "description": "Local-first meeting recorder: auto-records screen + both sides of the call on macOS, nothing leaves your machine.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "gen:protocol": "node scripts/gen-protocol.mjs",
+    "check:protocol": "node scripts/gen-protocol.mjs --check",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run check:protocol && npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "quicktype": "^26.0.0",
+    "typescript": "^7.0.0",
+    "vitest": "^5.1.0"
+  }
+}
