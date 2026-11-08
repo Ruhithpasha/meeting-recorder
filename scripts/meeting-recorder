@@ -116,7 +116,15 @@ EOF
 }
 
 # launchd: bootout BEFORE replacing files (KeepAlive would otherwise relaunch the old app mid-swap).
-agent_stop() { launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true; }
+# A copy the user opened by hand isn't launchd's: SIGTERM it too (it finishes any recording first),
+# or the new version would see it still running and exit as a duplicate.
+agent_stop() {
+  launchctl bootout "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || true
+  local pattern="Meeting Recorder.app/Contents/MacOS/MeetingRecorderAgent" i
+  pkill -TERM -f "$pattern" >/dev/null 2>&1 || return 0
+  for i in $(seq 1 30); do pgrep -f "$pattern" >/dev/null 2>&1 || return 0; sleep 0.5; done
+  warn "Meeting Recorder didn't stop within 15 s; continuing."
+}
 agent_start() { launchctl bootstrap "gui/$(id -u)" "$PLIST"; }
 
 install_cli() {

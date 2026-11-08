@@ -195,3 +195,15 @@ make_remote() {
   [ "$(cat "$MR_HOME/app/VERSION")" = "v1" ]
   ! grep -q "launchctl bootout" "$CALLS"
 }
+
+@test "agent_stop also stops a copy the user opened by hand (not managed by launchd)" {
+  fake_install
+  stub pkill 'exit 0'
+  stub pgrep 'exit 1'
+  run "$CLI" repair
+  [ "$status" -eq 0 ]
+  grep -q "pkill -TERM -f Meeting Recorder.app/Contents/MacOS/MeetingRecorderAgent" "$CALLS"
+  pkill_line="$(grep -n "pkill -TERM" "$CALLS" | head -1 | cut -d: -f1)"
+  bootstrap_line="$(grep -n "launchctl bootstrap" "$CALLS" | tail -1 | cut -d: -f1)"
+  [ "$pkill_line" -lt "$bootstrap_line" ]
+}
