@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { JobsInfo, Settings } from "@meeting-recorder/shared";
+import type { JobsInfo, ModelEngine, Settings } from "@meeting-recorder/shared";
 import type { Container } from "../container.ts";
 import { sessionCookieName, tokenMatcher, type SessionStore } from "../plugins/security.ts";
 
@@ -32,6 +32,11 @@ export function systemController(c: Container, token: string, sessions: SessionS
         engines: { whisper: caps.whisper, qwen: caps.qwen },
       };
     },
+
+    models: async () => c.models.get(),
+
+    downloadModel: async (request: FastifyRequest<{ Params: { engine: ModelEngine } }>, reply: FastifyReply) =>
+      reply.code(202).send(await c.models.download(request.params.engine)),
 
     getSettings: async () => c.settings.get(),
 

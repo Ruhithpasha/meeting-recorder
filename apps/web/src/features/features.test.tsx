@@ -406,3 +406,61 @@ describe("open models and sharing", () => {
     expect(await screen.findByRole("menuitem", { name: "Summary" })).toBeInTheDocument();
   });
 });
+
+describe("downloading open models", () => {
+  const jobs = { transcriptUnavailable: null, summaryUnavailable: null, languages: [], whisperLanguages: ["en"], engines: { whisper: null, qwen: null } };
+  const withWhisper = { ...DEFAULT_SETTINGS, transcription: { ...DEFAULT_SETTINGS.transcription, engine: "whisper" as const } };
+
+  it("offers Download now for a model that isn't downloaded, and starts it", async () => {
+    const calls = mockFetch({
+      "GET /api/settings": () => json(withWhisper),
+      "GET /api/jobs": () => json(jobs),
+      "GET /api/models": () => json({ whisper: { state: "missing" }, qwen: { state: "missing" } }),
+      "POST /api/models/whisper/download": () => json({ state: "downloading", percent: 0 }, { status: 202 }),
+    });
+    render(<SettingsView />);
+    await userEvent.click(await screen.findByRole("button", { name: "Download now (632 MB)" }));
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/models/whisper/download")).toBe(true);
+    expect(await screen.findByRole("progressbar", { name: "Downloading whisper" })).toBeInTheDocument();
+  });
+
+  it("shows live progress, the one-time preparing step, and ready", async () => {
+    mockFetch({
+      "GET /api/settings": () => json(withWhisper),
+      "GET /api/jobs": () => json(jobs),
+      "GET /api/models": () => json({ whisper: { state: "missing" }, qwen: { state: "missing" } }),
+    });
+    const { rerender } = render(<SettingsView liveModels={{ whisper: { state: "downloading", percent: 42, what: "Downloading the Whisper model" } }} />);
+    expect(await screen.findByText("Downloading the Whisper model")).toBeInTheDocument();
+    expect(screen.getByText("42%")).toBeInTheDocument();
+    rerender(<SettingsView liveModels={{ whisper: { state: "downloading", percent: 100, what: "Preparing Whisper for this Mac (a few minutes, once)" } }} />);
+    expect(screen.getByText(/Preparing Whisper for this Mac \(a few minutes, once\)/)).toBeInTheDocument();
+    rerender(<SettingsView liveModels={{ whisper: { state: "ready" } }} />);
+    expect(screen.getByText("Downloaded and ready")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Download now/ })).toBeNull();
+  });
+
+  it("a refused retry replaces an older failure from a live event", async () => {
+    mockFetch({
+      "GET /api/settings": () => json(withWhisper),
+      "GET /api/jobs": () => json(jobs),
+      "GET /api/models": () => json({ whisper: { state: "missing" }, qwen: { state: "missing" } }),
+      "POST /api/models/whisper/download": () => json({ error: "A meeting is being processed with this model right now and is downloading it. Try again in a moment." }, { status: 409 }),
+    });
+    render(<SettingsView liveModels={{ whisper: { state: "failed", error: "HTTP 503 earlier" } }} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(await screen.findByText(/being processed with this model/)).toBeInTheDocument();
+    expect(screen.queryByText("HTTP 503 earlier")).toBeNull();
+  });
+
+  it("shows why a download failed, with Try again", async () => {
+    mockFetch({
+      "GET /api/settings": () => json({ ...withWhisper, transcription: { ...withWhisper.transcription, summaryEngine: "qwen" } }),
+      "GET /api/jobs": () => json(jobs),
+      "GET /api/models": () => json({ whisper: { state: "ready" }, qwen: { state: "failed", error: "Couldn't download the Qwen model (HTTP 503)." } }),
+    });
+    render(<SettingsView />);
+    expect(await screen.findByText(/HTTP 503/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+});

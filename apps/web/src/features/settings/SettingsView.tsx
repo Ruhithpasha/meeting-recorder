@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import type { JobsInfo, Settings } from "@meeting-recorder/shared";
+import type { JobsInfo, ModelEngine, ModelState, Settings } from "@meeting-recorder/shared";
 import { Check, Info } from "lucide-react";
 import { api } from "@/api/client.ts";
 import { ErrorState, Spinner } from "@/components/ui.tsx";
@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { ModelDownload } from "./ModelDownload.tsx";
 
 const BUNDLE_ID = /^[A-Za-z0-9.-]+\*?$/;
 
@@ -28,13 +29,14 @@ function languageOptions(supported: string[], saved: string): string[] {
 }
 
 /** Lazy-loaded (code split): most visits never open settings. */
-export default function SettingsView() {
+export default function SettingsView({ liveModels }: { liveModels?: Partial<Record<ModelEngine, ModelState>> }) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [extraApps, setExtraApps] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobsInfo | null>(null);
+  const [models, setModels] = useState<Partial<Record<ModelEngine, ModelState>>>({});
 
   const load = async () => {
     setLoadError(null);
@@ -49,7 +51,20 @@ export default function SettingsView() {
   useEffect(() => {
     void load();
     api.jobs().then(setJobs, () => setJobs(null));
+    api.models().then((fetched) => setModels((m) => ({ ...fetched, ...m })), () => {}); // live news that came first wins
   }, []);
+
+  // Each live event (download progress) is merged in as it arrives; a later local result (for
+  // example a refused download) then replaces it, so the newest news is always what's shown.
+  useEffect(() => { if (liveModels) setModels((m) => ({ ...m, ...liveModels })); }, [liveModels]);
+  const modelState = (engine: ModelEngine) => models[engine];
+  const download = (engine: ModelEngine) => {
+    setModels((m) => ({ ...m, [engine]: { state: "downloading", percent: 0 } }));
+    api.downloadModel(engine).then(
+      (state) => setModels((m) => ({ ...m, [engine]: state })),
+      (e: Error) => setModels((m) => ({ ...m, [engine]: { state: "failed", error: e.message } })),
+    );
+  };
 
   if (loadError) return <ErrorState message={loadError} onRetry={load} />;
   if (!settings) return <Spinner label="Loading settings" />;
@@ -131,6 +146,7 @@ export default function SettingsView() {
               <NativeSelectOption value="whisper" disabled={!!jobs?.engines.whisper}>Whisper large-v3 turbo (more accurate, 632 MB download)</NativeSelectOption>
             </NativeSelect>
             {jobs?.engines.whisper && <p className="text-xs text-muted-foreground">{jobs.engines.whisper}</p>}
+            {settings.transcription.engine === "whisper" && <ModelDownload engine="whisper" state={modelState("whisper")} onDownload={() => download("whisper")} />}
           </div>
           <div className="grid gap-2">
             <Label htmlFor="summary-engine">Summary engine</Label>
@@ -141,6 +157,7 @@ export default function SettingsView() {
               <NativeSelectOption value="qwen" disabled={!!jobs?.engines.qwen}>Qwen3 1.7B open model (1.8 GB download)</NativeSelectOption>
             </NativeSelect>
             {jobs?.engines.qwen && <p className="text-xs text-muted-foreground">{jobs.engines.qwen}</p>}
+            {settings.transcription.summaryEngine === "qwen" && <ModelDownload engine="qwen" state={modelState("qwen")} onDownload={() => download("qwen")} />}
             <p className="text-xs text-muted-foreground">
               Open models download once from Hugging Face, then run only on this Mac, at low priority, when it's idle and plugged in.
             </p>

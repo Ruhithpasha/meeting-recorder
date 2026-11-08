@@ -313,6 +313,20 @@ describe("reveal in Finder", () => {
   });
 });
 
+describe("models API", () => {
+  it("GET /api/models reports each engine; download validates the engine and maps refusals to 409", async () => {
+    const { app } = await makeApp(); // no transcriber installed
+    const res = await app.inject({ url: "/api/models", headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ whisper: { state: "unavailable", error: "Transcription isn't installed." }, qwen: { state: "unavailable", error: "Transcription isn't installed." } });
+    const refused = await app.inject({ method: "POST", url: "/api/models/whisper/download", headers: AUTH });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toMatch(/isn't installed/);
+    expect((await app.inject({ method: "POST", url: "/api/models/gpt/download", headers: AUTH })).statusCode).toBe(400);
+    expect([401, 403]).toContain((await app.inject({ method: "POST", url: "/api/models/whisper/download" })).statusCode);
+  });
+});
+
 describe("share API", () => {
   it("POST share opens the share sheet for the original; validates what to share", async () => {
     const { app, id, agent } = await withMeeting();

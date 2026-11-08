@@ -13,6 +13,12 @@ import { jobArgs } from "./TranscriptionService.ts";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
+  // Like a real child process: "close" follows "exit" once stdout is done.
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    const handled = super.emit(event, ...args);
+    if (event === "exit") super.emit("close", ...args);
+    return handled;
+  }
   killed: string | null = null;
   readonly args: string[];
   constructor(args: string[]) { super(); this.args = args; }

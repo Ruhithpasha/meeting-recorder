@@ -65,6 +65,19 @@ enum OpenModels {
         return root.appendingPathComponent(WhisperManifest.modelFolder)
     }
 
+    /// Downloaded and verified (stat only after verification, like whisperFolder).
+    static func whisperReady(models: URL) -> Bool {
+        let root = models.appendingPathComponent("whisper")
+        return FileManager.default.fileExists(atPath: root.appendingPathComponent(WhisperManifest.marker).path)
+            && WhisperManifest.filesToFetch(root: root, hash: { _ in nil }).isEmpty
+    }
+
+    static func qwenReady(models: URL) -> Bool {
+        let dir = models.appendingPathComponent("qwen")
+        return FileManager.default.isExecutableFile(atPath: dir.appendingPathComponent("llama-b12202/llama-completion").path)
+            && FileManager.default.fileExists(atPath: dir.appendingPathComponent(qwen.file).path)
+    }
+
     // MARK: llama.cpp + Qwen
 
     /// (llama-completion binary, model file), downloading and verifying them on first use.
@@ -160,14 +173,14 @@ final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked S
     init(what: String, base: Int64 = 0, total: Int64 = 0) {
         self.what = what; self.base = base; self.total = total
         last = total > 0 ? Int(base * 100 / total) : 0
-        emit(["status": "downloading", "percent": last, "what": what]) // a file is starting
+        emit(["status": "downloading", "percent": last, "what": "Downloading the \(what)"]) // a file is starting
     }
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         let percent: Int
         if total > 0 { percent = Int((base + totalBytesWritten) * 100 / total) }
         else if totalBytesExpectedToWrite > 0 { percent = Int(totalBytesWritten * 100 / totalBytesExpectedToWrite) }
         else { return }
-        if percent >= last + 5 { last = percent; emit(["status": "downloading", "percent": percent, "what": what]) }
+        if percent >= last + 5 { last = percent; emit(["status": "downloading", "percent": percent, "what": "Downloading the \(what)"]) }
     }
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
 }
@@ -180,8 +193,10 @@ final class WhisperTrackRecognizer {
     private let pipe: WhisperKit
     let language: String?
 
-    init(models: URL, localeId: String?) async throws {
+    /// preparing: loading compiles the model for this Mac's Neural Engine (minutes, once); say so.
+    init(models: URL, localeId: String?, preparing: Bool = false) async throws {
         let folder = try await OpenModels.whisperFolder(models: models)
+        if preparing { emit(["status": "downloading", "percent": 100, "what": "Preparing Whisper for this Mac (a few minutes, once)"]) }
         // tokenizerFolder: the tokenizer is cached with the model (WhisperKit's default is ~/Documents).
         pipe = try await WhisperKit(WhisperKitConfig(modelFolder: folder.path, tokenizerFolder: models.appendingPathComponent("whisper"),
                                                      verbose: false, logLevel: .none, prewarm: false, load: true, download: false))

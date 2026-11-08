@@ -40,11 +40,12 @@ export type Spawner = (command: string, args: string[]) => ChildProcess;
  *  taskpolicy execs the program, so the pid is the transcriber's own. It leads its own process
  *  group and kill() signals the whole group, so helpers it starts (llama.cpp) stop with it, even
  *  on SIGKILL. stderr is discarded: an unread pipe fills up and would block the transcriber. */
-export const backgroundSpawn: Spawner = (cmd, args) => {
-  const child = spawn("/usr/sbin/taskpolicy", ["-b", cmd, ...args], { stdio: ["ignore", "pipe", "ignore"], detached: true });
+export const policySpawn = (policy: string[]): Spawner => (cmd, args) => {
+  const child = spawn("/usr/sbin/taskpolicy", [...policy, cmd, ...args], { stdio: ["ignore", "pipe", "ignore"], detached: true });
   child.kill = (signal: NodeJS.Signals | number = "SIGTERM") => {
+    if (!child.pid) return false; // never started
     try {
-      process.kill(-child.pid!, signal);
+      process.kill(-child.pid, signal);
       return true;
     } catch {
       return false; // already gone
@@ -52,6 +53,7 @@ export const backgroundSpawn: Spawner = (cmd, args) => {
   };
   return child;
 };
+export const backgroundSpawn = policySpawn(["-b"]);
 
 /** Command-line arguments for one job (see MeetingRecorderTranscriber's usage). */
 export function jobArgs(kind: JobKind, recording: string, dir: string, t: Settings["transcription"], modelsDir?: string): string[] {
@@ -73,6 +75,8 @@ export interface TranscriptionDeps {
   transcriberPath: string | null;
   /** Where open models are downloaded once (Hugging Face) and kept. */
   modelsDir?: string;
+  /** True while that open model is being downloaded: its jobs wait (ModelService resumes them). */
+  modelBusy?: (engine: "whisper" | "qwen") => boolean;
   spawner?: Spawner;
   now?: () => number;
 }
@@ -193,11 +197,21 @@ export class TranscriptionService {
     return queued;
   }
 
+  /** True while a job using this open-model engine runs (it may be downloading the model itself). */
+  isRunningEngine(engine: "whisper" | "qwen"): boolean {
+    if (!this.running) return false;
+    const t = this.d.settings().transcription;
+    return (this.running.kind === "transcript" ? t.engine : t.summaryEngine) === engine;
+  }
+
   /** Starts the next job if every gate is open. No disk scans. Safe to call at any time. */
   pump(): void {
     if (this.running || this.power !== "ac" || this.d.recording.stateName !== "idle") return;
+    const t = this.d.settings().transcription;
+    const engine = (kind: JobKind) => (kind === "transcript" ? t.engine : t.summaryEngine);
+    const waitingForModel = (kind: JobKind) => { const e = engine(kind); return e !== "apple" && !!this.d.modelBusy?.(e); };
     const runnable = (id: string, kind: JobKind) =>
-      !this.unavailableFor(kind) && (this.manual.has(`${kind}:${id}`) || this.autoAllowed(kind));
+      !this.unavailableFor(kind) && !waitingForModel(kind) && (this.manual.has(`${kind}:${id}`) || this.autoAllowed(kind));
     // Common idle case first: nothing is allowed at all, so don't even look at the queue.
     if (!this.manual.size && !JOB_KINDS.some((k) => !this.unavailableFor(k) && this.autoAllowed(k))) return;
 
@@ -261,7 +275,7 @@ export class TranscriptionService {
       });
     }
     const code = await new Promise<number | null>((resolve) => {
-      child.on("exit", (exitCode) => resolve(exitCode));
+      child.on("close", (exitCode) => resolve(exitCode)); // after stdout is drained: the last error line counts
       child.on("error", () => resolve(null));
     });
     clearTimeout(watchdog);

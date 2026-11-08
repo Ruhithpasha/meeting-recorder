@@ -129,7 +129,7 @@ export class ShareService {
         publish("failed", { error: stoppedFor ?? lastError ?? "The smaller copy couldn't be made." });
       }
     };
-    child.on("exit", done);
+    child.on("close", done); // after stdout is drained
     child.on("error", () => done(null));
   }
 }

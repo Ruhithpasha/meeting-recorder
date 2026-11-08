@@ -11,6 +11,12 @@ import { MAX_ATTEMPTS, TranscriptionService } from "./TranscriptionService.ts";
 /** A fake transcriber process the test finishes on demand. */
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
+  // Like a real child process: "close" follows "exit" once stdout is done.
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    const handled = super.emit(event, ...args);
+    if (event === "exit") super.emit("close", ...args);
+    return handled;
+  }
   killed: string | null = null;
   readonly args: string[];
   constructor(args: string[]) { super(); this.args = args; }
@@ -210,6 +216,29 @@ describe("TranscriptionService", () => {
     const { timeoutMs } = await import("./TranscriptionService.ts");
     expect(timeoutMs(60)).toBe((120 + 600) * 1000);
     expect(timeoutMs(null)).toBe((7200 + 600) * 1000);
+  });
+});
+
+describe("open-model jobs wait for their download", () => {
+  it("doesn't start a Whisper job while Whisper is downloading; starts it after", async () => {
+    let downloading = true;
+    const { container: c, children, add } = await setup();
+    c.transcription.dispose();
+    await c.settings.update({ ...c.settings.get(), transcription: { ...c.settings.get().transcription, engine: "whisper" } });
+    const tx = new TranscriptionService({ repo: c.repo, bus: c.bus, recording: c.recording, log: silentLog, settings: () => c.settings.get(),
+      transcriberPath: "/app/MeetingRecorderTranscriber", modelBusy: () => downloading,
+      spawner: (_cmd, args) => { const ch = new FakeChild(args); children.push(ch); return ch as unknown as ChildProcess; } });
+    await tx.init();
+    const id = await add(1);
+    tx.setPower("ac");
+    tx.pump();
+    expect(children).toHaveLength(0);
+    downloading = false;
+    tx.pump();
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+    expect(children[0]!.args).toContain("whisper");
+    expect(children[0]!.args[0]).toContain(id);
+    tx.dispose();
   });
 });
 

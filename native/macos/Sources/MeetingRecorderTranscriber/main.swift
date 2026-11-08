@@ -5,6 +5,8 @@
 //   MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale en_US] [--engine whisper --models <dir>]
 //   MeetingRecorderTranscriber --summarize <meeting dir> [--engine qwen --models <dir>]   (Summarizer.swift)
 //   MeetingRecorderTranscriber --export <recording.mp4> <share.mp4>                       (Exporter.swift)
+//   MeetingRecorderTranscriber --model-status --models <dir>   {"whisper":bool,"qwen":bool}
+//   MeetingRecorderTranscriber --prepare whisper|qwen --models <dir>   download (+ prepare) ahead of time
 //   MeetingRecorderTranscriber --capabilities    {"locales":[…],"whisperLanguages":[…],"whisper":reason|null,"qwen":reason|null}
 //
 //   recording.mp4 ── audio track 1 (system: "Others") ─┐  AVAssetReader → analyzer's PCM format
@@ -61,6 +63,27 @@ if args.count >= 2, args[1] == "--capabilities" {
         if #available(macOS 26.0, *) { locales = await SpeechTranscriber.supportedLocales.map(\.identifier).sorted() }
         return ["locales": locales, "whisperLanguages": OpenModels.whisperLanguages,
                 "whisper": OpenModels.whisperUnavailable ?? NSNull(), "qwen": OpenModels.qwenUnavailable ?? NSNull()]
+    }
+}
+
+// Open models: installed? (cheap: file checks only, no hashing, no network)
+if args.count >= 2, args[1] == "--model-status" {
+    emit(["whisper": OpenModels.whisperReady(models: modelsDir), "qwen": OpenModels.qwenReady(models: modelsDir)])
+    exit(0)
+}
+
+// Download (and for Whisper, prepare for this Mac's chip) ahead of the first meeting.
+if args.count >= 3, args[1] == "--prepare" {
+    let which = args[2]
+    if which == "whisper", let reason = OpenModels.whisperUnavailable { fail(3, reason) }
+    if which == "qwen", let reason = OpenModels.qwenUnavailable { fail(3, reason) }
+    runJob("Download failed") {
+        if which == "whisper" {
+            _ = try await WhisperTrackRecognizer(models: modelsDir, localeId: nil, preparing: true)
+        } else {
+            _ = try await OpenModels.qwenRuntime(models: modelsDir)
+        }
+        return ["done": true]
     }
 }
 

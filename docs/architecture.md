@@ -148,6 +148,19 @@ Measured (M2, 16 GB):
 | Whisper, first run | ~620 MB | ~5 min, once (download + Core ML compile) |
 | Qwen | 1.2–2.4 GB peak, mostly the memory-mapped model (reclaimable) | ~2k tokens summarized in 16 s |
 
+### Downloading models ahead of time (`services/ModelService.ts`)
+
+```
+GET  /api/models                   {whisper, qwen}: missing | downloading(percent, what) | ready | failed(error) | unavailable(reason)
+                                   from `--model-status` (file checks only: no hashing, no network)
+POST /api/models/:engine/download  ─▶ taskpolicy -c utility MeetingRecorderTranscriber --prepare <engine> --models <dir>
+                                   progress lines ─▶ {type:"model"} SSE ─▶ Settings progress bar
+```
+
+- One download per engine; a second click joins it. Jobs needing that model wait (pump skips them) and start when it's ready.
+- Whisper's prepare step also loads the model once, which compiles it for the Neural Engine (the slow first-run step), so the first meeting is fast.
+- Utility priority (not background): the user is watching the progress bar, but it still yields to anything interactive.
+
 ## Sharing (`services/ShareService.ts`, `Exporter.swift`, `DashboardWindow.share`)
 
 ```

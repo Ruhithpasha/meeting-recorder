@@ -80,7 +80,7 @@ After a meeting is saved, Meeting Recorder transcribes it with Apple's on-device
 
 ### Open models (optional)
 
-In Settings you can swap Apple's models for open models from Hugging Face. Each downloads **once** into `~/.meeting-recorder/models` (pinned version, checked against its fingerprint), then runs only on your Mac, at background priority, when it's idle and plugged in. No meeting content is ever uploaded.
+In Settings you can swap Apple's models for open models from Hugging Face. Pick one and press **Download now** to download it with a progress bar (Whisper also gets prepared for your Mac's chip, a few minutes once), or let it download before the first meeting that needs it. Each downloads **once** into `~/.meeting-recorder/models` (pinned version, checked against its fingerprint), then runs only on your Mac, at background priority, when it's idle and plugged in. No meeting content is ever uploaded.
 
 | Engine | For | Download | Measured on an M2 (16 GB) |
 |---|---|---|---|

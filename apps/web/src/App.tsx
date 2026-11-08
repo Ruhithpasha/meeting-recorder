@@ -1,6 +1,6 @@
 import { Settings as SettingsIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { ServerEvent, Status } from "@meeting-recorder/shared";
+import type { ModelEngine, ModelState, ServerEvent, Status } from "@meeting-recorder/shared";
 import { establishSession, type SessionResult } from "@/api/session.ts";
 import { EmptyState, Spinner } from "@/components/ui.tsx";
 import { BrandMark } from "@/components/Waveform.tsx";
@@ -40,12 +40,17 @@ function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shares, setShares] = useState<Record<string, ShareProgress>>({});
+  const [liveModels, setLiveModels] = useState<Partial<Record<ModelEngine, ModelState>>>({});
   const meetings = useMeetings();
   const { applyEvent } = meetings;
 
   const onEvent = useCallback((event: ServerEvent) => {
     if (event.type === "status") setStatus(event.status);
     else if (event.type === "share") setShares((s) => ({ ...s, [event.id]: event }));
+    else if (event.type === "model") {
+      const { type: _type, engine, ...state } = event;
+      setLiveModels((m) => ({ ...m, [engine]: state }));
+    }
     else applyEvent(event);
   }, [applyEvent]);
   const connection = useServerEvents(onEvent);
@@ -110,7 +115,7 @@ function Dashboard() {
           <RecordingBanner status={status} meeting={liveMeeting} />
           {settingsOpen ? (
             <Suspense fallback={<Spinner label="Loading settings" />}>
-              <SettingsView />
+              <SettingsView liveModels={liveModels} />
             </Suspense>
           ) : (
             // key: fresh state per meeting, so a pending delete confirmation can't carry over

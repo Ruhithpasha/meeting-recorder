@@ -15,6 +15,7 @@ import { RecordingService } from "./services/RecordingService.ts";
 import { RecoveryService } from "./services/RecoveryService.ts";
 import { SettingsService } from "./services/SettingsService.ts";
 import { StatusService } from "./services/StatusService.ts";
+import { ModelService } from "./services/ModelService.ts";
 import { ShareService } from "./services/ShareService.ts";
 import { TranscriptionService, type Spawner } from "./services/TranscriptionService.ts";
 
@@ -77,11 +78,19 @@ export async function createContainer(o: ContainerOptions) {
   });
   const detection = new DetectionService({ recording, settings: () => settings.get(), log: o.log, bus });
   const meetings = new MeetingService(repo, recording, bus);
+  const models = new ModelService({
+    bus, log: o.log, transcriberPath: o.transcriberPath ?? null, modelsDir: join(o.stateDir, "models"), spawner: o.spawner,
+    // getCapabilities/unknown are defined below; these run only later. "Not checked yet" isn't "unavailable".
+    unavailable: async (engine) => { const reason = (await getCapabilities())[engine]; return reason === unknown ? null : reason; },
+    jobUsing: (engine) => transcription.isRunningEngine(engine),
+  });
   const transcription = new TranscriptionService({
     repo, bus, recording, log: o.log, settings: () => settings.get(),
     transcriberPath: o.transcriberPath ?? null, modelsDir: join(o.stateDir, "models"), spawner: o.spawner,
+    modelBusy: (engine) => models.isDownloading(engine),
   });
   settings.onChange = () => transcription.settingsChanged();
+  models.onFinished = () => transcription.pump();
   const share = new ShareService({ repo, bus, agent: o.agent, recording, log: o.log, transcriberPath: o.transcriberPath ?? null, spawner: o.spawner });
   await transcription.init();
 
@@ -107,7 +116,7 @@ export async function createContainer(o: ContainerOptions) {
   });
 
   return {
-    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, share, onAgentEvent,
+    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, share, models, onAgentEvent,
     reveal: o.reveal ?? (() => {}),
     capabilities: getCapabilities,
     start() {
@@ -120,6 +129,7 @@ export async function createContainer(o: ContainerOptions) {
       detection.dispose();
       transcription.dispose();
       share.dispose();
+      models.dispose();
     },
   };
 }

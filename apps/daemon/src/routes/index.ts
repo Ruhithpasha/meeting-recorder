@@ -26,6 +26,10 @@ export async function registerRoutes(app: FastifyInstance, c: Container, token: 
   app.get("/api/settings", system.getSettings);
   app.put("/api/settings", { schema: { body: SETTINGS_SCHEMA } }, system.putSettings);
 
+  app.get("/api/models", system.models);
+  app.post("/api/models/:engine/download", {
+    schema: { params: { type: "object", required: ["engine"], properties: { engine: { enum: ["whisper", "qwen"] } } } },
+  }, system.downloadModel);
   app.get("/api/meetings", {
     schema: {
       querystring: {

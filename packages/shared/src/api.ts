@@ -77,6 +77,17 @@ export interface JobsInfo {
   engines: { whisper: string | null; qwen: string | null };
 }
 
+/** An open model on this Mac (GET /api/models, {type:"model"} events). */
+export type ModelEngine = "whisper" | "qwen";
+export interface ModelState {
+  state: "missing" | "downloading" | "ready" | "failed" | "unavailable";
+  /** 0-100 while downloading. */
+  percent?: number;
+  /** What's happening now, e.g. "Whisper model" or "Preparing Whisper for this Mac". */
+  what?: string;
+  error?: string;
+}
+
 /** Share a meeting through the macOS share sheet (POST /api/meetings/:id/share). */
 export type ShareWhat = "video" | "original" | "summary";
 
@@ -95,4 +106,5 @@ export type ServerEvent =
   | { type: "meeting"; meeting: Meeting }
   | { type: "meetingDeleted"; id: string }
   /** Progress of a share copy (POST /api/meetings/:id/share with what "video"). */
+  | ({ type: "model"; engine: ModelEngine } & ModelState)
   | { type: "share"; id: string; state: "exporting" | "ready" | "failed"; percent?: number; error?: string };

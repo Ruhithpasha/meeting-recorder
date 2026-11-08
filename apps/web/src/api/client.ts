@@ -1,5 +1,5 @@
 // Typed client for the daemon's API. Same origin, so the HttpOnly session cookie rides along.
-import type { JobsInfo, Meeting, MeetingPage, MeetingSummary, Settings, ShareWhat, Status, Transcript } from "@meeting-recorder/shared";
+import type { JobsInfo, Meeting, MeetingPage, MeetingSummary, ModelEngine, ModelState, Settings, ShareWhat, Status, Transcript } from "@meeting-recorder/shared";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -44,6 +44,8 @@ export const api = {
     return response.text();
   },
   jobs: () => request<JobsInfo>("/api/jobs"),
+  models: () => request<Record<ModelEngine, ModelState>>("/api/models"),
+  downloadModel: (engine: ModelEngine) => request<ModelState>(`/api/models/${engine}/download`, { method: "POST" }),
   getSummary: (id: string) => request<MeetingSummary>(`/api/meetings/${encodeURIComponent(id)}/summary`),
   summarize: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/summarize`, { method: "POST" }),
   /** Opens the macOS share sheet; "exporting" means a smaller copy is being made first. */
