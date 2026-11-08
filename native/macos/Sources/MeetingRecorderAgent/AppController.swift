@@ -21,8 +21,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var daemon: DaemonHost?
     private var lastPermission: PermissionState = .granted
     private var quitting = false
-    /// Set by deliberate quits only (Quit menu item, logout/shutdown, SIGTERM). Dock → Quit just
-    /// closes the dashboard: the recorder is meant to run all the time.
+    /// Set once a quit is decided (⌘Q / Dock / menu confirmed, logout/shutdown, SIGTERM).
     private var allowTermination = false
     private var sigterm: DispatchSourceSignal?
 
@@ -43,7 +42,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.onOpenDashboard = { [weak self] in self?.send(EventEncoder.tray(.openDashboard)) }
         menu.onOpenFolder = { [weak self] in self?.send(EventEncoder.tray(.openFolder)) }
         menu.onOpenPermissions = { Permissions.openScreenRecordingSettings() }
-        menu.onQuit = { [weak self] in self?.quit() }
+        menu.onQuit = { [weak self] in self?.userQuit() }
         MainMenu.install(target: self, quit: #selector(quitFromMenu), closeWindow: #selector(closeDashboard))
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
             self?.allowTermination = true // logout, restart, shutdown
@@ -128,13 +127,26 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    /// ⌘Q and Dock → Quit quit, like any Mac app. A recording in progress is asked about first,
+    /// then finished and saved before the app exits (quit() waits for the recorder).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if allowTermination { return .terminateNow }
-        dashboard.close() // e.g. Dock → Quit: close the window, keep recording meetings
-        return .terminateCancel
+        userQuit()
+        return .terminateCancel // quit() terminates for real once the recording is saved
     }
 
-    @objc private func quitFromMenu() { quit() }
+    @objc private func quitFromMenu() { userQuit() }
+
+    private func userQuit() {
+        guard recorder.isBusy else { return quit() }
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = "A meeting is being recorded"
+        alert.informativeText = "Quitting stops the recording and saves it. Meeting Recorder starts again the next time you log in, or when you open it."
+        alert.addButton(withTitle: "Stop, Save and Quit")
+        alert.addButton(withTitle: "Keep Recording")
+        if alert.runModal() == .alertFirstButtonReturn { quit() }
+    }
     @objc private func closeDashboard() { dashboard.close() }
 
     /// First line to every (re)started daemon, followed by the current facts it needs.

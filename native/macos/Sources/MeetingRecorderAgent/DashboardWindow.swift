@@ -99,8 +99,8 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
 }
 
 /// The app's menu bar while the dashboard window is open. Edit commands make copy/paste work in
-/// settings fields. Deliberately no ⌘Q: closing the dashboard must not stop the 24/7 recorder by
-/// accident. Quitting is an explicit menu item.
+/// settings fields. ⌘Q quits (asking first while a meeting is being recorded); ⌘W only closes
+/// the dashboard, and the recorder keeps running.
 enum MainMenu {
     static func install(target: AnyObject, quit: Selector, closeWindow: Selector) {
         let main = NSMenu()
@@ -109,7 +109,7 @@ enum MainMenu {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Hide Meeting Recorder", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit Meeting Recorder (stops recording)", action: quit, keyEquivalent: "")
+        let quitItem = NSMenuItem(title: "Quit Meeting Recorder", action: quit, keyEquivalent: "q")
         quitItem.target = target
         appMenu.addItem(quitItem)
         appItem.submenu = appMenu

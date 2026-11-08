@@ -53,7 +53,7 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
   - Settings (bottom of the sidebar): quality (720p or 1080p, at 30 or 15 fps), auto-record, transcription and summary engines, the meeting language, extra apps.
   - Share: send the video (a smaller copy), the original or the summary through the Mac's share menu.
   - Follows your Mac's light or dark appearance. A live waveform shows while recording; the menu-bar icon is the same waveform, red and moving while recording.
-  - Closing the window doesn't stop recording. To stop Meeting Recorder completely, use "Quit Meeting Recorder" in the menu bar or the app menu.
+  - Closing the window (⌘W) doesn't stop recording. ⌘Q, Dock → Quit, or "Quit Meeting Recorder" in the menu bar quits; if a meeting is being recorded it asks first, then saves the recording before quitting. It starts again at your next login, or when you open it.
 - **Files:** one folder per meeting, for example `~/Meetings/2026-11-08_14-30-05_zoom/`:
   - `recording.mp4`: H.264 video plus two AAC tracks (others, you). It plays in QuickTime.
   - While recording, `video-1.mp4`, `system-1.mp4`, `mic-1.mp4` and `parts.json` (each stream on its own); they're joined into `recording.mp4` when the meeting ends.

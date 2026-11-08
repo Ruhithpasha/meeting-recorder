@@ -1,7 +1,8 @@
 // A small floating "REC 12:34" pill while recording, so it's always obvious that a meeting is
 // being recorded, even when the menu-bar icon is hidden behind the notch. It floats above other
-// windows on every Space (and over full-screen apps), can be dragged anywhere, and a click opens
-// the dashboard. It is not in the recording: our own windows are excluded from capture.
+// windows on every desktop Space, but not over full-screen apps (it would cover them; the
+// menu-bar timer still shows there). It can be dragged anywhere, and a click opens the dashboard.
+// It is not in the recording: our own windows are excluded from capture.
 import AgentCore
 import AppKit
 
@@ -49,7 +50,7 @@ final class RecordingIndicator {
         let size = NSSize(width: 112, height: 30)
         let panel = NSPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle] // not .fullScreenAuxiliary
         panel.isMovableByWindowBackground = true
         panel.backgroundColor = .clear
         panel.isOpaque = false
