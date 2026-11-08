@@ -13,6 +13,7 @@
 // Except when the recorder itself failed mid-meeting: the rest of the call must not be lost, so a
 // new recording ("… (continued)") starts right away, at most MAX_CONTINUATIONS times per meeting.
 import type { MicEvent, Settings } from "@meeting-recorder/shared";
+import { continuedTitle } from "../models/meeting.ts";
 import type { Logger } from "../repositories/MeetingRepository.ts";
 import type { EventBus } from "./EventBus.ts";
 import rulesFile from "./detection-rules.json" with { type: "json" };
@@ -133,8 +134,7 @@ export class DetectionService {
   private continueAfterCrash(crashed: { app: string; title: string }): void {
     this.continuations += 1;
     this.clearStart();
-    const suffix = " (continued)";
-    const title = crashed.title.replace(/ \(continued\)$/, "").slice(0, 120 - suffix.length) + suffix; // titles cap at 120
+    const title = continuedTitle(crashed.title);
     this.log.warn({ app: crashed.app, attempt: this.continuations }, "recorder failed mid-meeting; continuing in a new recording");
     this.startTimer = setTimeout(() => {
       this.startTimer = null;

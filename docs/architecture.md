@@ -100,8 +100,9 @@ Best effort: if the language or the model isn't available yet (it's requested fo
 
 ## Recorder robustness
 
-- Audio is placed on a continuous timeline (`AgentCore/AudioTimeline.swift`) before the writer: time = anchor + samples so far / rate; drift within ±100 ms is absorbed, a real pause restarts the timeline, a buffer far in the past is dropped. A mid-meeting mic append failure (-11800 / -16341) was observed with ScreenCaptureKit's arrival timestamps.
-- If the writer still fails mid-meeting, `DetectionService` continues in a new recording ("… (continued)"), up to 3 times per meeting; a user's Stop is never undone.
+- Audio is placed on a continuous timeline (`AgentCore/AudioTimeline.swift`): time = anchor + samples so far / rate; drift within ±100 ms is absorbed, a real pause restarts the timeline, a buffer far in the past is dropped. A buffer is copied only when its time changes (`AudioCopy.swift`, which also logs each input's first buffer).
+- Known open issue: AVAssetWriter intermittently fails (-11800 / -16341) at a 5 s fragment boundary, usually first noticed on the mic input (it appends most often). Synthetic three-track reproductions never fail, and neither the timeline nor copying every buffer into a plain one (tried, then removed) stopped it in live tests. The agent logs the first buffer of each input and, on failure, the full error and per-track counts. One public report ties -16341 to too little I/O time between fragments.
+- So recordings survive it: an auto-started recording continues in a new "… (continued)" recording (`DetectionService`, up to 3 per meeting), and a manual one does too (`RecordingService.continueManual`, up to 3 in 10 minutes). Everything up to the last saved fragment (≤5 s) is kept. A user's Stop is never undone.
 - A floating REC pill (`RecordingIndicator.swift`) and a timer next to the menu-bar icon show recording is on; the app's own windows are excluded from capture.
 
 ## Transcription and summaries (`services/TranscriptionService.ts` + `MeetingRecorderTranscriber`)

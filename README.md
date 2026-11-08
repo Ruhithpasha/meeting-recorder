@@ -42,7 +42,7 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 ## Using it
 
 - **Automatic:** join a call. After about 3 seconds a notification says recording started, the menu-bar icon turns red with a running timer, and a small floating **REC** pill appears (drag it anywhere; click it to open the dashboard; it isn't in the recording). About 15 seconds after the call ends, the recording is saved.
-- **If the recorder fails mid-call**, everything up to that point is kept and recording continues straight away in a new "… (continued)" meeting.
+- **If the recorder fails mid-recording** (a rare macOS file-writer error that is still being tracked down), everything up to the last few seconds is kept and recording continues straight away in a new "… (continued)" meeting, for automatic and manual recordings.
 - **Manual:** menu bar → Start/Stop Recording, or the dashboard's button.
 - **Stopping early:** if you stop an automatic recording during a call, it won't restart until that call ends.
 - **Browser calls (Meet, Teams web):** these need the meeting tab to be the visible tab, because the app checks the window title. Joining with your mic muted at the OS level isn't detected; start those manually.

@@ -24,7 +24,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentErrorCode, Meeting, Settings, StartCommand } from "@meeting-recorder/shared";
 import type { AgentPort } from "../agent/AgentChannel.ts";
-import { meetingId, newMeeting } from "../models/meeting.ts";
+import { continuedTitle, meetingId, newMeeting } from "../models/meeting.ts";
 import type { Logger, MeetingRepository } from "../repositories/MeetingRepository.ts";
 import type { EventBus } from "./EventBus.ts";
 import type { RecoveryService } from "./RecoveryService.ts";
@@ -76,6 +76,8 @@ export class RecordingService {
   /** Set when an auto-started recording just died because the recorder failed (not a user stop):
    *  detection uses it to continue the meeting in a new recording. Cleared by the next start. */
   private crashed: Meeting | null = null;
+  /** When manual recordings were last continued after a failure (at most 3 within 10 minutes). */
+  private manualContinuations: number[] = [];
   private timer: NodeJS.Timeout | null = null;
   /** Meetings whose stop timed out: the agent may still be finishing them. */
   private readonly detached = new Set<string>();
@@ -154,8 +156,11 @@ export class RecordingService {
         if (event.type === "stop" && s.name === "recording") return this.requestStop();
         if (event.type === "agentStopped") return this.finish(s.meeting, event.durationSec);
         if (event.type === "agentError") {
-          if (s.name === "recording" && s.auto) this.crashed = s.meeting;
-          return this.recoverAndIdle(s.meeting, event.message);
+          if (s.name === "recording" && s.auto) this.crashed = s.meeting; // detection continues it
+          await this.recoverAndIdle(s.meeting, event.message);
+          // A recording the user started keeps going too: a new "(continued)" one starts at once.
+          if (s.name === "recording" && !s.auto) await this.continueManual(s.meeting);
+          return;
         }
         if (event.type === "stopTimeout" && s.name === "stopping") {
           this.detached.add(s.meeting.id);
@@ -173,7 +178,8 @@ export class RecordingService {
     return !("meetingId" in event) || event.meetingId === id;
   }
 
-  private async begin(trigger: Trigger): Promise<void> {
+  private async begin(trigger: Trigger, opts: { continuation?: boolean } = {}): Promise<void> {
+    if (!opts.continuation && trigger.source === "manual") this.manualContinuations = []; // a new recording the user started
     if (!(await this.d.hasDiskSpace())) {
       this.d.status.setWarning("disk", "Not recording: less than 2 GB of disk space left.");
       return;
@@ -251,6 +257,19 @@ export class RecordingService {
     this.d.log.warn({ id: meeting.id, error: message }, "recorder reported an error; recovering the file");
     // If recovery itself throws, toIdleAfter's "will be recovered automatically" banner stands.
     await this.toIdleAfter(async () => this.reportRecovery(await this.recoverFile(meeting.id), message));
+  }
+
+  /** Continues a failed manual recording (at most 3 times in 10 minutes for one recording the
+   *  user started). Any banner about the failed part (e.g. "couldn't be saved") stays visible. */
+  private async continueManual(meeting: Meeting): Promise<void> {
+    const now = Date.now();
+    this.manualContinuations = this.manualContinuations.filter((t) => now - t < 10 * 60_000);
+    if (this.manualContinuations.length >= 3 || this.state.name !== "idle") return;
+    const banner = this.d.status.warningFor("recording");
+    this.d.log.warn({ id: meeting.id }, "recorder failed mid-recording; continuing the manual recording");
+    await this.begin({ app: meeting.app, title: continuedTitle(meeting.title), source: "manual" }, { continuation: true });
+    if (this.state.name !== "idle") this.manualContinuations.push(now); // only a continuation that started counts
+    if (banner) this.d.status.setWarning("recording", banner);
   }
 
   /** Banner after a writer error: none when something playable was kept (the meeting shows its

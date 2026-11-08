@@ -54,3 +54,14 @@ describe("parseMeeting", () => {
       .toMatchObject({ durationSec: null, sizeBytes: null, transcript: "none", summary: "none" });
   });
 });
+
+describe("continuedTitle", () => {
+  it("adds the suffix once, within the 120-character cap", async () => {
+    const { continuedTitle } = await import("./meeting.ts");
+    expect(continuedTitle("Standup")).toBe("Standup (continued)");
+    expect(continuedTitle("Standup (continued)")).toBe("Standup (continued)");
+    const long = continuedTitle("x".repeat(120));
+    expect(long).toHaveLength(120);
+    expect(long.endsWith(" (continued)")).toBe(true);
+  });
+});

@@ -45,6 +45,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         var dropped = [0, 0, 0]          // timestamp not after the input's previous sample
         var formats: [CMFormatDescription?] = [nil, nil, nil]
         var timelines = [AudioTimeline(), AudioTimeline(), AudioTimeline()] // audio inputs 1, 2
+        let audioCopies = [AudioCopy(), AudioCopy(), AudioCopy()]
         var live: AnyObject?             // LiveTranscriber (macOS 26), when live transcription runs
         var formatChanges = [0, 0, 0]
 
@@ -56,7 +57,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
                 let last = lastAppended[i].isValid ? String(format: "%.2fs", CMTimeSubtract(lastAppended[i], start).seconds) : "-"
                 return "\(names[i]): \(appended[i]) samples, last \(last), \(dropped[i]) dropped, \(formatChanges[i]) format changes"
             }
-            return "writer failed during \(step); status \(writer.status.rawValue); " + tracks.joined(separator: "; ")
+            let error = writer.error as NSError?
+            let details = error.map { e in "\(e.domain) \(e.code) \(e.userInfo.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", "))" } ?? "none"
+            return "writer failed during \(step); status \(writer.status.rawValue); error \(details); " + tracks.joined(separator: "; ")
         }
         init(meetingId: String, writer: AVAssetWriter, inputs: [AVAssetWriterInput], fps: Int) {
             self.meetingId = meetingId
@@ -199,13 +202,11 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             guard let asbd = buffer.formatDescription.flatMap({ CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee }),
                   let placed = s.timelines[index].place(arrival: arrival, count: CMSampleBufferGetNumSamples(buffer), rate: asbd.mSampleRate),
                   CMTimeCompare(placed, start) >= 0 else { s.dropped[index] += 1; return }
-            if placed != arrival {
-                var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: CMTimeScale(asbd.mSampleRate.rounded())), presentationTimeStamp: placed, decodeTimeStamp: .invalid)
-                var copy: CMSampleBuffer?
-                guard CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy) == noErr,
-                      let copy else { s.dropped[index] += 1; return }
-                sample = copy
+            guard let copy = s.audioCopies[index].placed(buffer, at: placed, rate: asbd.mSampleRate, label: index == 1 ? "system" : "mic") else {
+                s.dropped[index] += 1
+                return
             }
+            sample = copy
             time = placed
             if #available(macOS 26.0, *), let live = s.live as? LiveTranscriber {
                 live.feed(sample, track: index - 1, seconds: CMTimeSubtract(time, start).seconds) // 0: Others, 1: You

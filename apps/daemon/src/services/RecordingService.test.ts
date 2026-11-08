@@ -12,7 +12,7 @@ const manual = { app: "Manual", title: "Manual recording", source: "manual" as c
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] }));
 afterEach(() => vi.useRealTimers());
 
-async function started(trigger = auto) {
+async function started(trigger: { app: string; title: string; source: "auto" | "manual" } = auto) {
   const ctx = await makeContainer();
   const { container: c, agent } = ctx;
   await c.recording.dispatch({ type: "start", trigger });
@@ -20,7 +20,7 @@ async function started(trigger = auto) {
   return { ...ctx, c, id };
 }
 
-async function recording(trigger = auto) {
+async function recording(trigger: { app: string; title: string; source: "auto" | "manual" } = auto) {
   const ctx = await started(trigger);
   await ctx.c.recording.dispatch({ type: "agentStarted", meetingId: ctx.id });
   return ctx;
@@ -356,5 +356,55 @@ describe("live transcript", () => {
     await c.recording.toggle();
     await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 3 });
     expect(c.repo.get(id)?.transcript).toBe("none");
+  });
+});
+
+describe("a manual recording that fails keeps going", () => {
+  it("starts a new '(continued)' recording at once, at most 3 times in 10 minutes", async () => {
+    const { c, agent, id } = await recording(manual);
+    let current = id;
+    for (let i = 0; i < 4; i++) {
+      await c.recording.dispatch({ type: "agentError", meetingId: current, code: "writer", message: "-16341" });
+      if (i < 3) {
+        expect(c.recording.stateName).toBe("starting");
+        current = agent.starts.at(-1)!.meetingId;
+        expect(c.repo.get(current)?.title).toBe("Manual recording (continued)");
+        await c.recording.dispatch({ type: "agentStarted", meetingId: current });
+      }
+    }
+    expect(agent.starts).toHaveLength(4);
+    expect(c.recording.stateName).toBe("idle"); // the 4th failure in 10 minutes: stop retrying
+  });
+
+  it("the 'couldn't be saved' banner for the lost part stays after continuing", async () => {
+    const { c, id } = await recording(manual); // no file: nothing recoverable
+    await c.recording.dispatch({ type: "agentError", meetingId: id, code: "writer", message: "-16341" });
+    expect(c.recording.stateName).toBe("starting");
+    expect(c.status.get().warning).toMatch(/couldn't be saved/);
+  });
+
+  it("a new manual recording gets its own 3 continuations", async () => {
+    const { c, agent, id } = await recording(manual);
+    let current = id;
+    for (let i = 0; i < 3; i++) {
+      await c.recording.dispatch({ type: "agentError", meetingId: current, code: "writer", message: "x" });
+      current = agent.starts.at(-1)!.meetingId;
+      await c.recording.dispatch({ type: "agentStarted", meetingId: current });
+    }
+    await c.recording.toggle(); // the user stops it
+    await c.recording.dispatch({ type: "agentStopped", meetingId: current, durationSec: 3 });
+    await c.recording.dispatch({ type: "start", trigger: manual }); // and starts a new one
+    const fresh = agent.starts.at(-1)!.meetingId;
+    await c.recording.dispatch({ type: "agentStarted", meetingId: fresh });
+    await c.recording.dispatch({ type: "agentError", meetingId: fresh, code: "writer", message: "x" });
+    expect(c.recording.stateName).toBe("starting"); // continued, not blocked by the earlier recording
+  });
+
+  it("a manual recording stopped by the user is not continued", async () => {
+    const { c, agent, id } = await recording(manual);
+    await c.recording.toggle();
+    await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 4 });
+    expect(agent.starts).toHaveLength(1);
+    expect(c.recording.stateName).toBe("idle");
   });
 });

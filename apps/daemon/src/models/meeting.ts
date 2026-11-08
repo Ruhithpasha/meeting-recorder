@@ -25,6 +25,12 @@ export function meetingId(at: Date, label: string, suffix?: number): string {
   return `${date}_${time}_${slug}`;
 }
 
+/** "Standup" -> "Standup (continued)": never stacked, and still within the 120-character cap. */
+export function continuedTitle(title: string): string {
+  const suffix = " (continued)";
+  return title.replace(/ \(continued\)$/, "").slice(0, 120 - suffix.length) + suffix;
+}
+
 /** Window titles come from other apps: strip control characters and cap the length. */
 export function sanitizeTitle(raw: string): string {
   // eslint-disable-next-line no-control-regex

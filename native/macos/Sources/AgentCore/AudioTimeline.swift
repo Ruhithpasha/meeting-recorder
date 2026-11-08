@@ -1,9 +1,8 @@
 // Gives captured audio a clean, continuous timeline before it reaches the file writer.
 //
 // ScreenCaptureKit stamps each audio buffer with the time it arrived, which jitters: buffers can
-// overlap or leave tiny gaps. The writer's AAC encoder wants one continuous stream, and the
-// microphone track failing mid-meeting (AVFoundation -11800 / -16341) is consistent with it not
-// getting one. So each buffer is placed right after the previous one, by sample count:
+// overlap or leave tiny gaps. The writer's AAC encoder and the live speech analyzer both want one
+// continuous stream. So each buffer is placed right after the previous one, by sample count:
 //
 //   time = anchor + samples written so far / sample rate
 //   drift (arrival time - that time) within ±100 ms: keep the continuous time

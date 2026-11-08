@@ -27,13 +27,16 @@ final class LiveTranscriber: @unchecked Sendable {
         let format: AVAudioFormat
         let input: AsyncStream<AnalyzerInput>.Continuation
         var converter: AVAudioConverter?
+        /// Seconds into the recording of this track's first audio: the analyzer counts time from
+        /// the audio it was given, so its result times are shifted by this to match the recording.
+        var offset: Double?
         var results: Task<Void, Never>?
         init(speaker: String, transcriber: SpeechTranscriber, analyzer: SpeechAnalyzer, format: AVAudioFormat, input: AsyncStream<AnalyzerInput>.Continuation) {
             self.speaker = speaker; self.transcriber = transcriber; self.analyzer = analyzer; self.format = format; self.input = input
         }
     }
 
-    private let queue = DispatchQueue(label: "live-transcriber", qos: .utility)
+    fileprivate let queue = DispatchQueue(label: "live-transcriber", qos: .utility)
     private var tracks: [Track] = []          // [Others, You]
     private var segments: [Transcript.Segment] = []
     private var failed = false
@@ -63,12 +66,13 @@ final class LiveTranscriber: @unchecked Sendable {
                 let (stream, input) = AsyncStream.makeStream(of: AnalyzerInput.self)
                 try await analyzer.start(inputSequence: stream)
                 let track = Track(speaker: speaker, transcriber: transcriber, analyzer: analyzer, format: format, input: input)
-                track.results = Task { [weak live] in
+                track.results = Task { [weak live, weak track] in
                     do {
                         for try await result in transcriber.results where result.isFinal {
                             let text = String(result.text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !text.isEmpty else { continue }
-                            live?.add(.init(start: result.range.start.seconds, end: result.range.end.seconds, speaker: speaker, text: text))
+                            let offset = live?.queue.sync { track?.offset } ?? nil ?? 0
+                            live?.add(.init(start: result.range.start.seconds + offset, end: result.range.end.seconds + offset, speaker: speaker, text: text))
                         }
                     } catch {
                         Log.warn("live transcript (\(speaker)) stopped: \(error.localizedDescription)")
@@ -91,8 +95,12 @@ final class LiveTranscriber: @unchecked Sendable {
             guard !failed, tracks.indices.contains(index) else { return }
             if firstFed == nil { firstFed = seconds }
             let track = tracks[index]
+            if track.offset == nil { track.offset = seconds }
             guard let pcm = Self.convert(buffer, to: track.format, using: &track.converter) else { return }
-            track.input.yield(AnalyzerInput(buffer: pcm, bufferStartTime: CMTime(seconds: seconds, preferredTimescale: 48_000)))
+            // One continuous stream, no per-buffer start times: the converter holds a few samples
+            // back between buffers, so stamping each with its input time made them overlap. Times
+            // are put back on the recording's timeline with the track's offset.
+            track.input.yield(AnalyzerInput(buffer: pcm))
         }
     }
 

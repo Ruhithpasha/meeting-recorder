@@ -49,6 +49,10 @@ export class StatusService {
     this.publish();
   }
 
+  warningFor(key: WarningKey): string | null {
+    return this.warnings.get(key) ?? null;
+  }
+
   hasWarning(key: WarningKey): boolean {
     return this.warnings.has(key);
   }
