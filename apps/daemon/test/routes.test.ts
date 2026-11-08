@@ -323,6 +323,9 @@ describe("models API", () => {
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error).toMatch(/isn't installed/);
     expect((await app.inject({ method: "POST", url: "/api/models/gpt/download", headers: AUTH })).statusCode).toBe(400);
+    const cancel = await app.inject({ method: "POST", url: "/api/models/whisper/cancel", headers: AUTH });
+    expect(cancel.statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/models/gpt/cancel", headers: AUTH })).statusCode).toBe(400);
     expect([401, 403]).toContain((await app.inject({ method: "POST", url: "/api/models/whisper/download" })).statusCode);
   });
 });

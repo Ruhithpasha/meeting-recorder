@@ -87,7 +87,7 @@ export async function createContainer(o: ContainerOptions) {
   const transcription = new TranscriptionService({
     repo, bus, recording, log: o.log, settings: () => settings.get(),
     transcriberPath: o.transcriberPath ?? null, modelsDir: join(o.stateDir, "models"), spawner: o.spawner,
-    modelBusy: (engine) => models.isDownloading(engine),
+    modelBusy: (engine) => models.holdsJobs(engine),
   });
   settings.onChange = () => transcription.settingsChanged();
   models.onFinished = () => transcription.pump();

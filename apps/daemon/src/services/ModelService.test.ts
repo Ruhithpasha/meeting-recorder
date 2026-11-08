@@ -109,6 +109,54 @@ describe("ModelService", () => {
     expect(children).toHaveLength(0);
   });
 
+  it("cancel stops the download and goes back to 'missing' (not 'failed'); a new download can start", async () => {
+    const { service, events, children } = setup();
+    await service.download("whisper");
+    expect(service.cancel("whisper")).toEqual({ state: "missing" }); // what the cancel leads to
+    expect(children[0]!.killed).toBe("SIGTERM");
+    children[0]!.emit("exit", null);
+    expect(events.at(-1)).toEqual({ type: "model", engine: "whisper", state: "missing" });
+    expect(service.isDownloading("whisper")).toBe(false);
+    await service.download("whisper");
+    expect(children).toHaveLength(2);
+    expect(children[1]!.args).toEqual(["--prepare", "whisper", "--models", "/models"]);
+  });
+
+  it("cancel while the download is still being set up: it never starts, and nothing sticks", async () => {
+    const { service, children, events, install } = setup();
+    const started = service.download("whisper");
+    expect(service.cancel("whisper")).toEqual({ state: "missing" });
+    expect(await started).toEqual({ state: "missing" });
+    expect(children).toHaveLength(0);
+    expect(events.at(-1)).toEqual({ type: "model", engine: "whisper", state: "missing" });
+    await service.download("whisper"); // a later download works and reports normally
+    install({ whisper: true, qwen: false });
+    children[0]!.emit("exit", 0);
+    expect(events.at(-1)).toEqual({ type: "model", engine: "whisper", state: "ready" });
+  });
+
+  it("finishing just as Cancel arrives counts as installed", async () => {
+    const { service, events, children } = setup();
+    await service.download("qwen");
+    service.cancel("qwen");
+    children[0]!.emit("exit", 0);
+    expect(events.at(-1)).toEqual({ type: "model", engine: "qwen", state: "ready" });
+  });
+
+  it("after a cancel, meetings needing the model wait until it's downloaded again", async () => {
+    const { service } = setup();
+    await service.download("whisper");
+    service.cancel("whisper");
+    expect(service.holdsJobs("whisper")).toBe(true);
+    expect(service.holdsJobs("qwen")).toBe(false);
+  });
+
+  it("cancel with nothing running does nothing", async () => {
+    const { service, children } = setup();
+    expect(service.cancel("qwen")).toEqual({ state: "missing" });
+    expect(children).toHaveLength(0);
+  });
+
   it("stops downloads on shutdown", async () => {
     const { service, children } = setup();
     await service.download("whisper");

@@ -45,6 +45,7 @@ export const api = {
   },
   jobs: () => request<JobsInfo>("/api/jobs"),
   models: () => request<Record<ModelEngine, ModelState>>("/api/models"),
+  cancelModelDownload: (engine: ModelEngine) => request<ModelState>(`/api/models/${engine}/cancel`, { method: "POST" }),
   downloadModel: (engine: ModelEngine) => request<ModelState>(`/api/models/${engine}/download`, { method: "POST" }),
   getSummary: (id: string) => request<MeetingSummary>(`/api/meetings/${encodeURIComponent(id)}/summary`),
   summarize: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/summarize`, { method: "POST" }),

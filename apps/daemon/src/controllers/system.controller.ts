@@ -38,6 +38,8 @@ export function systemController(c: Container, token: string, sessions: SessionS
     downloadModel: async (request: FastifyRequest<{ Params: { engine: ModelEngine } }>, reply: FastifyReply) =>
       reply.code(202).send(await c.models.download(request.params.engine)),
 
+    cancelModel: async (request: FastifyRequest<{ Params: { engine: ModelEngine } }>) => c.models.cancel(request.params.engine),
+
     getSettings: async () => c.settings.get(),
 
     putSettings: async (request: FastifyRequest<{ Body: Settings }>) => c.settings.update(request.body),

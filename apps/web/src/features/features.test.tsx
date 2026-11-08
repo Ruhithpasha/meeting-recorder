@@ -424,6 +424,35 @@ describe("downloading open models", () => {
     expect(await screen.findByRole("progressbar", { name: "Downloading whisper" })).toBeInTheDocument();
   });
 
+  it("cancels a running download", async () => {
+    const calls = mockFetch({
+      "GET /api/settings": () => json(withWhisper),
+      "GET /api/jobs": () => json(jobs),
+      "GET /api/models": () => json({ whisper: { state: "downloading", percent: 30, what: "Downloading the Whisper model" }, qwen: { state: "missing" } }),
+      "POST /api/models/whisper/cancel": () => json({ state: "missing" }),
+    });
+    render(<SettingsView />);
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(calls.some((c) => c.method === "POST" && c.path === "/api/models/whisper/cancel")).toBe(true);
+    // Shown at once from the response, without waiting for the server's event.
+    expect(await screen.findByRole("button", { name: "Download now (632 MB)" })).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
+  it("a failed cancel says the download is still running (no fake failure)", async () => {
+    mockFetch({
+      "GET /api/settings": () => json(withWhisper),
+      "GET /api/jobs": () => json(jobs),
+      "GET /api/models": () => json({ whisper: { state: "downloading", percent: 30, what: "Downloading the Whisper model" }, qwen: { state: "missing" } }),
+      "POST /api/models/whisper/cancel": () => json({ error: "Daemon busy" }, { status: 503 }),
+    });
+    render(<SettingsView />);
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await screen.findByText(/Couldn't cancel: Daemon busy\. It's still downloading\./)).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
   it("shows live progress, the one-time preparing step, and ready", async () => {
     mockFetch({
       "GET /api/settings": () => json(withWhisper),

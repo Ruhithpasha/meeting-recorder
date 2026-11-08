@@ -27,9 +27,9 @@ export async function registerRoutes(app: FastifyInstance, c: Container, token: 
   app.put("/api/settings", { schema: { body: SETTINGS_SCHEMA } }, system.putSettings);
 
   app.get("/api/models", system.models);
-  app.post("/api/models/:engine/download", {
-    schema: { params: { type: "object", required: ["engine"], properties: { engine: { enum: ["whisper", "qwen"] } } } },
-  }, system.downloadModel);
+  const engineParams = { type: "object", required: ["engine"], properties: { engine: { enum: ["whisper", "qwen"] } } } as const;
+  app.post("/api/models/:engine/download", { schema: { params: engineParams } }, system.downloadModel);
+  app.post("/api/models/:engine/cancel", { schema: { params: engineParams } }, system.cancelModel);
   app.get("/api/meetings", {
     schema: {
       querystring: {

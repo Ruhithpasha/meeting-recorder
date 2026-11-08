@@ -37,6 +37,7 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
   const [error, setError] = useState<string | null>(null);
   const [jobs, setJobs] = useState<JobsInfo | null>(null);
   const [models, setModels] = useState<Partial<Record<ModelEngine, ModelState>>>({});
+  const [cancelling, setCancelling] = useState<Partial<Record<ModelEngine, { busy?: boolean; error?: string }>>>({});
 
   const load = async () => {
     setLoadError(null);
@@ -63,6 +64,16 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
     api.downloadModel(engine).then(
       (state) => setModels((m) => ({ ...m, [engine]: state })),
       (e: Error) => setModels((m) => ({ ...m, [engine]: { state: "failed", error: e.message } })),
+    );
+  };
+
+  // Cancel shows its result at once (the server says what the cancel leads to); a failed request
+  // leaves the download running and says so, rather than inventing a failure.
+  const cancelDownload = (engine: ModelEngine) => {
+    setCancelling((c) => ({ ...c, [engine]: { busy: true } }));
+    api.cancelModelDownload(engine).then(
+      (state) => { setModels((m) => ({ ...m, [engine]: state })); setCancelling((c) => ({ ...c, [engine]: {} })); },
+      (e: Error) => setCancelling((c) => ({ ...c, [engine]: { error: e.message } })),
     );
   };
 
@@ -146,7 +157,8 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
               <NativeSelectOption value="whisper" disabled={!!jobs?.engines.whisper}>Whisper large-v3 turbo (more accurate, 632 MB download)</NativeSelectOption>
             </NativeSelect>
             {jobs?.engines.whisper && <p className="text-xs text-muted-foreground">{jobs.engines.whisper}</p>}
-            {settings.transcription.engine === "whisper" && <ModelDownload engine="whisper" state={modelState("whisper")} onDownload={() => download("whisper")} />}
+            {settings.transcription.engine === "whisper" && <ModelDownload engine="whisper" state={modelState("whisper")} onDownload={() => download("whisper")} onCancel={() => cancelDownload("whisper")}
+                cancelling={cancelling.whisper?.busy} cancelError={cancelling.whisper?.error} />}
           </div>
           <div className="grid gap-2">
             <Label htmlFor="summary-engine">Summary engine</Label>
@@ -157,7 +169,8 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
               <NativeSelectOption value="qwen" disabled={!!jobs?.engines.qwen}>Qwen3 1.7B open model (1.8 GB download)</NativeSelectOption>
             </NativeSelect>
             {jobs?.engines.qwen && <p className="text-xs text-muted-foreground">{jobs.engines.qwen}</p>}
-            {settings.transcription.summaryEngine === "qwen" && <ModelDownload engine="qwen" state={modelState("qwen")} onDownload={() => download("qwen")} />}
+            {settings.transcription.summaryEngine === "qwen" && <ModelDownload engine="qwen" state={modelState("qwen")} onDownload={() => download("qwen")} onCancel={() => cancelDownload("qwen")}
+                cancelling={cancelling.qwen?.busy} cancelError={cancelling.qwen?.error} />}
             <p className="text-xs text-muted-foreground">
               Open models download once from Hugging Face, then run only on this Mac, at low priority, when it's idle and plugged in.
             </p>

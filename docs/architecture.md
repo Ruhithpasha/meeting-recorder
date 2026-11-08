@@ -153,10 +153,12 @@ Measured (M2, 16 GB):
 ```
 GET  /api/models                   {whisper, qwen}: missing | downloading(percent, what) | ready | failed(error) | unavailable(reason)
                                    from `--model-status` (file checks only: no hashing, no network)
+POST /api/models/:engine/cancel    stops it (verified files kept)
 POST /api/models/:engine/download  ─▶ taskpolicy -c utility MeetingRecorderTranscriber --prepare <engine> --models <dir>
                                    progress lines ─▶ {type:"model"} SSE ─▶ Settings progress bar
 ```
 
+- `POST /api/models/:engine/cancel` stops the download's process group and goes back to `missing`. Each file is moved into place only after its SHA-256 check, so finished files stay and the next download resumes from them.
 - One download per engine; a second click joins it. Jobs needing that model wait (pump skips them) and start when it's ready.
 - Whisper's prepare step also loads the model once, which compiles it for the Neural Engine (the slow first-run step), so the first meeting is fast.
 - Utility priority (not background): the user is watching the progress bar, but it still yields to anything interactive.

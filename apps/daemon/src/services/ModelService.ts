@@ -1,6 +1,7 @@
 // Open models (Whisper, Qwen): are they downloaded, and download them on request with progress.
 //
 //   GET  /api/models                 { whisper: ModelState, qwen: ModelState }
+//   POST /api/models/:engine/cancel   stops it (verified files are kept, so the next download resumes)
 //   POST /api/models/:engine/download ─▶ MeetingRecorderTranscriber --prepare <engine> --models <dir>
 //        {"status":"downloading","percent":n,"what":…} lines ─▶ {type:"model"} SSE events ─▶ progress bar
 //
@@ -38,6 +39,8 @@ export class ModelService {
   private readonly d: ModelDeps;
   private readonly states = new Map<ModelEngine, ModelState>();
   private readonly running = new Map<ModelEngine, () => void>();
+  private readonly cancelled = new Set<ModelEngine>();
+  private readonly held = new Set<ModelEngine>();
   /** Called when a download finishes (either way), so jobs that waited for it can go on. */
   onFinished: () => void = () => {};
 
@@ -47,6 +50,12 @@ export class ModelService {
 
   isDownloading(engine: ModelEngine): boolean {
     return this.running.has(engine);
+  }
+
+  /** Jobs needing this model must wait: it's downloading, or the user cancelled its download (a
+   *  job would otherwise download it anyway, undoing the cancel). Download now lifts the hold. */
+  holdsJobs(engine: ModelEngine): boolean {
+    return this.running.has(engine) || this.held.has(engine);
   }
 
   /** Current state of both engines. Unknown ones are checked on disk first. */
@@ -71,6 +80,8 @@ export class ModelService {
     if (!this.d.transcriberPath) throw conflict("Open models need the transcription helper, which isn't installed.");
     if (this.running.has(engine)) return this.states.get(engine)!;
     if (this.d.jobUsing(engine)) throw conflict("A meeting is being processed with this model right now and is downloading it. Try again in a moment.");
+    this.held.delete(engine);
+    this.cancelled.delete(engine);
     // Reserve before any await, so two clicks (or two windows) can't start two downloads.
     let kill = () => {};
     this.running.set(engine, () => kill());
@@ -83,6 +94,13 @@ export class ModelService {
       this.running.delete(engine);
       if (previous) this.states.set(engine, previous); else this.states.delete(engine);
       throw error;
+    }
+    if (this.cancelled.delete(engine)) { // cancelled while we were checking: never start it
+      this.running.delete(engine);
+      this.held.add(engine);
+      this.states.set(engine, { state: "missing" });
+      this.d.bus.publish({ type: "model", engine, state: "missing" });
+      return { state: "missing" };
     }
     if (current.state === "unavailable" || current.state === "ready") {
       this.running.delete(engine);
@@ -116,7 +134,9 @@ export class ModelService {
       if (finished) return;
       finished = true;
       this.running.delete(engine);
-      if (code === 0) publish({ state: "ready" });
+      const cancelled = this.cancelled.delete(engine);
+      if (code === 0) publish({ state: "ready" }); // finished just as Cancel arrived: it's installed
+      else if (cancelled) publish({ state: "missing" });
       else {
         this.d.log.warn({ engine, code, error: lastError }, "model download failed");
         publish({ state: "failed", error: lastError ?? "The download didn't finish. Try again." });
@@ -126,6 +146,18 @@ export class ModelService {
     child.on("close", done); // after stdout is drained: the last error line counts
     child.on("error", () => done(null));
     return this.states.get(engine)!;
+  }
+
+  /** Stops a running download (or one still being set up). Files already verified are kept, so
+   *  the next download resumes. Meetings needing the model wait until it's downloaded. Returns
+   *  the state the cancel leads to. */
+  cancel(engine: ModelEngine): ModelState {
+    const kill = this.running.get(engine);
+    if (!kill) return this.states.get(engine) ?? { state: "missing" };
+    this.cancelled.add(engine);
+    this.held.add(engine);
+    kill(); // a no-op before the process exists: download() sees `cancelled` after its check
+    return { state: "missing" };
   }
 
   dispose(): void {
