@@ -186,7 +186,8 @@ cmd_update() {
   if is_recording; then die "A meeting is being recorded. Update after it ends."; fi
   local staging="$HOME_DIR/app-next" bundle_next="$HOME_DIR/Meeting Recorder.app.next" node
   rm -rf "$staging" "$bundle_next"
-  # Expanded now (double quotes): these locals are gone when the EXIT trap runs.
+  # Expanded now (double quotes) on purpose: these locals are gone when the EXIT trap runs.
+  # shellcheck disable=SC2064
   trap "rm -rf '$staging' '$bundle_next'" EXIT
 
   say "Fetching the latest version…"
@@ -206,6 +207,7 @@ cmd_update() {
   rm -rf "$prev" "$bundle_prev"
   agent_stop
   # From here on, any failure restores the previous version and restarts it.
+  # shellcheck disable=SC2064  # expanded now on purpose (locals)
   trap "rollback_update '$prev' '$bundle_prev' '$staging' '$bundle_next'" ERR
   mv "$APP_SRC" "$prev"
   mv "$staging" "$APP_SRC"
