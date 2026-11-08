@@ -3,7 +3,7 @@ import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyBaseLogger } from "fastify";
 import type { Container } from "./container.ts";
 import { registerErrors } from "./plugins/errors.ts";
-import { registerSecurity } from "./plugins/security.ts";
+import { registerSecurity, SessionStore } from "./plugins/security.ts";
 import { registerRoutes } from "./routes/index.ts";
 
 export interface AppOptions {
@@ -30,7 +30,8 @@ export async function buildApp(o: AppOptions) {
   });
 
   await app.register(fastifyCookie);
-  registerSecurity(app, { token: o.token, port: o.port });
+  const sessions = new SessionStore();
+  registerSecurity(app, { token: o.token, port: o.port, sessions });
   registerErrors(app);
 
   // Dashboard assets. Hashed asset names are immutable; index.html must always be revalidated.
@@ -43,7 +44,7 @@ export async function buildApp(o: AppOptions) {
       res.header("cache-control", path.includes("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
     },
   });
-  await registerRoutes(app, o.container, o.token);
+  await registerRoutes(app, o.container, o.token, sessions, o.port);
 
   // Client-side routes fall back to the SPA shell; unknown API paths stay JSON 404s.
   app.setNotFoundHandler((request, reply) => {

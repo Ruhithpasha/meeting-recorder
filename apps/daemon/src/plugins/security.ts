@@ -2,14 +2,41 @@
 //
 //  1. Host check: only "127.0.0.1:<port>" / "localhost:<port>". Blocks DNS rebinding, where a web
 //     page you visit points its own hostname at 127.0.0.1 to reach this server.
-//  2. Auth on /api/*: a per-launch 256-bit token, as a Bearer header (CLI) or an HttpOnly,
-//     SameSite=Strict cookie set by POST /api/session (dashboard). No CORS headers are ever sent,
-//     so other origins cannot read responses.
+//  2. Auth on /api/*: the per-launch 256-bit token as a Bearer header (CLI), or a dashboard
+//     session cookie. Cookies are scoped by HOST, not port, so other servers on 127.0.0.1 receive
+//     them and "SameSite" treats every 127.0.0.1 port as the same site. Therefore:
+//       - the cookie holds a separate random session id, never the master token;
+//       - its name includes the port (mr_session_<port>);
+//       - cookie-authenticated POST/PUT/DELETE must carry Origin: http://127.0.0.1:<port>
+//         (CSRF: a page on another local port can't start recordings or change settings).
+//     No CORS headers are ever sent, so other origins cannot read responses, and
+//     Cross-Origin-Resource-Policy: same-origin stops them embedding recordings.
 //  3. Strict CSP and related headers on every response: the dashboard can't load anything remote.
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-export const SESSION_COOKIE = "mr_session";
+export const sessionCookieName = (port: number) => `mr_session_${port}`;
+
+/** Dashboard sessions: random ids, kept in memory (a daemon restart ends them all). */
+export class SessionStore {
+  private readonly ids = new Set<string>();
+  private static readonly MAX = 32;
+
+  create(): string {
+    const id = randomBytes(32).toString("base64url");
+    this.ids.add(id);
+    if (this.ids.size > SessionStore.MAX) this.ids.delete(this.ids.values().next().value!); // oldest
+    return id;
+  }
+
+  has(id: string | undefined): boolean {
+    if (!id) return false;
+    for (const known of this.ids) if (tokenMatcher(known)(id)) return true;
+    return false;
+  }
+}
+
+const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 const CSP = [
   "default-src 'self'",
@@ -34,7 +61,7 @@ export function tokenMatcher(token: string): (candidate: string | undefined) => 
   };
 }
 
-export function registerSecurity(app: FastifyInstance, opts: { token: string; port: () => number }): void {
+export function registerSecurity(app: FastifyInstance, opts: { token: string; port: () => number; sessions: SessionStore }): void {
   const matches = tokenMatcher(opts.token);
 
   app.addHook("onRequest", async (request, reply) => {
@@ -51,8 +78,15 @@ export function registerSecurity(app: FastifyInstance, opts: { token: string; po
 
     const header = request.headers.authorization;
     const bearer = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
-    if (matches(bearer) || matches(request.cookies[SESSION_COOKIE])) return;
-    return reply.code(401).send({ error: "Unauthorized" });
+    if (matches(bearer)) return; // CLI: a custom header can't be sent cross-site without CORS
+
+    if (!opts.sessions.has(request.cookies[sessionCookieName(port)])) return reply.code(401).send({ error: "Unauthorized" });
+    if (MUTATING.has(request.method)) {
+      const origin = request.headers.origin;
+      if (origin !== `http://127.0.0.1:${port}` && origin !== `http://localhost:${port}`) {
+        return reply.code(403).send({ error: "Forbidden" });
+      }
+    }
   });
 
   app.addHook("onSend", async (_request, reply: FastifyReply, payload) => {

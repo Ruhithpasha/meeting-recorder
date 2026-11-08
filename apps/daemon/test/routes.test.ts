@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "@meeting-recorder/shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.ts";
-import { AUTH, HOST, makeApp, makeContainer, TEST_TOKEN } from "./helpers/harness.ts";
+import { AUTH, HOST, makeApp, makeContainer, TEST_PORT, TEST_TOKEN } from "./helpers/harness.ts";
 
 async function withMeeting() {
   const ctx = await makeApp();
@@ -49,18 +49,52 @@ describe("security", () => {
     expect(agent.starts).toHaveLength(0);
   });
 
-  it("session: exchanges the token for an HttpOnly SameSite=Strict cookie that then authorizes", async () => {
+  async function sessionCookie(app: Awaited<ReturnType<typeof makeApp>>["app"]) {
+    const res = await app.inject({ method: "POST", url: "/api/session", headers: HOST, payload: { token: TEST_TOKEN } });
+    return { res, cookie: (res.headers["set-cookie"] as string).split(";")[0]! };
+  }
+  const ORIGIN = { origin: `http://127.0.0.1:${TEST_PORT}` };
+
+  it("session: a per-port HttpOnly SameSite=Strict cookie with a random id (never the master token)", async () => {
     const { app } = await makeApp();
     const bad = await app.inject({ method: "POST", url: "/api/session", headers: HOST, payload: { token: "wrong" } });
     expect(bad.statusCode).toBe(401);
-    const res = await app.inject({ method: "POST", url: "/api/session", headers: HOST, payload: { token: TEST_TOKEN } });
+    const { res, cookie } = await sessionCookie(app);
     expect(res.statusCode).toBe(204);
-    const cookie = res.headers["set-cookie"] as string;
-    expect(cookie).toMatch(/mr_session=/);
-    expect(cookie).toMatch(/HttpOnly/);
-    expect(cookie).toMatch(/SameSite=Strict/);
-    const status = await app.inject({ url: "/api/status", headers: { ...HOST, cookie: cookie.split(";")[0]! } });
-    expect(status.statusCode).toBe(200);
+    const header = res.headers["set-cookie"] as string;
+    expect(header).toMatch(new RegExp(`^mr_session_${TEST_PORT}=`));
+    expect(header).toMatch(/HttpOnly/);
+    expect(header).toMatch(/SameSite=Strict/);
+    expect(header).not.toContain(TEST_TOKEN);
+    expect((await app.inject({ url: "/api/status", headers: { ...HOST, cookie } })).statusCode).toBe(200);
+  });
+
+  it("the master token in a cookie, or a cookie for another port, does not authorize", async () => {
+    const { app } = await makeApp();
+    for (const cookie of [`mr_session_${TEST_PORT}=${TEST_TOKEN}`, `mr_session=${TEST_TOKEN}`]) {
+      expect((await app.inject({ url: "/api/status", headers: { ...HOST, cookie } })).statusCode).toBe(401);
+    }
+    const { cookie } = await sessionCookie(app);
+    const otherPort = cookie.replace(`mr_session_${TEST_PORT}`, "mr_session_3000");
+    expect((await app.inject({ url: "/api/status", headers: { ...HOST, cookie: otherPort } })).statusCode).toBe(401);
+  });
+
+  it("CSRF: a cookie-authenticated POST needs our own Origin (other local ports are rejected)", async () => {
+    const { app, agent } = await makeApp();
+    const { cookie } = await sessionCookie(app);
+    for (const origin of [undefined, "http://127.0.0.1:3000", "http://evil.example.com", "null"]) {
+      const headers = { ...HOST, cookie, ...(origin ? { origin } : {}) };
+      expect((await app.inject({ method: "POST", url: "/api/meetings", headers })).statusCode).toBe(403);
+    }
+    expect(agent.starts).toHaveLength(0);
+    const ok = await app.inject({ method: "POST", url: "/api/meetings", headers: { ...HOST, cookie, ...ORIGIN } });
+    expect(ok.statusCode).toBe(202);
+  });
+
+  it("recordings can't be embedded by another origin (CORP same-origin)", async () => {
+    const { app } = await makeApp();
+    const res = await app.inject({ url: "/", headers: HOST });
+    expect(res.headers["cross-origin-resource-policy"]).toBe("same-origin");
   });
 
   it("sends a strict CSP and no CORS headers", async () => {

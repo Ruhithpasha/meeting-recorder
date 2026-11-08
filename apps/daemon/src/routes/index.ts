@@ -5,6 +5,7 @@ import { meetingsController } from "../controllers/meetings.controller.ts";
 import { systemController } from "../controllers/system.controller.ts";
 import { MEETING_ID_PATTERN } from "../models/meeting.ts";
 import { SETTINGS_SCHEMA } from "../models/settings.ts";
+import type { SessionStore } from "../plugins/security.ts";
 
 const idParams = {
   type: "object",
@@ -12,9 +13,9 @@ const idParams = {
   properties: { id: { type: "string", pattern: MEETING_ID_PATTERN.source } },
 } as const;
 
-export async function registerRoutes(app: FastifyInstance, c: Container, token: string): Promise<void> {
+export async function registerRoutes(app: FastifyInstance, c: Container, token: string, sessions: SessionStore, port: () => number): Promise<void> {
   const meetings = meetingsController(c);
-  const system = systemController(c, token);
+  const system = systemController(c, token, sessions, port);
 
   app.post("/api/session", {
     schema: { body: { type: "object", additionalProperties: false, required: ["token"], properties: { token: { type: "string", maxLength: 256 } } } },

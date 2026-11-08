@@ -57,7 +57,12 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 ## Security (local only)
 
 - Fastify binds `127.0.0.1` only. `Host` must be `127.0.0.1:<port>` or `localhost:<port>` (blocks DNS rebinding).
-- `/api/*` needs the per-launch 256-bit token: `Authorization: Bearer` (CLI, read from `~/.meeting-recorder/runtime.json`, mode 0600) or an HttpOnly `SameSite=Strict` cookie that the dashboard gets by POSTing the token from its URL fragment to `/api/session`.
+- `/api/*` needs either the per-launch 256-bit token as `Authorization: Bearer` (CLI, read from `~/.meeting-recorder/runtime.json`, mode 0600), or a dashboard session cookie that the dashboard gets by POSTing the token from its URL fragment to `/api/session`.
+- Cookies are scoped by host, not port, so other servers on 127.0.0.1 receive them and `SameSite` treats every 127.0.0.1 port as the same site. The cookie therefore:
+  - holds a separate random session id (never the token);
+  - is named per port (`mr_session_<port>`);
+  - requires an `Origin: http://127.0.0.1:<port>` header on cookie-authenticated `POST`/`PUT`/`DELETE` (CSRF protection against pages on other local ports).
+- The auth check uses the route the router matched, not the raw URL, so percent-encoded paths can't skip it.
 - No CORS headers. Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no-referrer.
 - No outbound network: `test/egress.test.ts` fails if booting and using the daemon connects anywhere but loopback.
 - Commands to the agent are validated against the schema before sending (e.g. `openUrl` only to the local dashboard).

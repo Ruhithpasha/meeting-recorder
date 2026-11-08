@@ -1,18 +1,21 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Settings } from "@meeting-recorder/shared";
 import type { Container } from "../container.ts";
-import { SESSION_COOKIE, tokenMatcher } from "../plugins/security.ts";
+import { sessionCookieName, tokenMatcher, type SessionStore } from "../plugins/security.ts";
 
 export const SSE_HEARTBEAT_MS = 25_000;
 
-export function systemController(c: Container, token: string) {
+export function systemController(c: Container, token: string, sessions: SessionStore, port: () => number) {
   const matches = tokenMatcher(token);
   return {
-    /** Exchanges the launch token (from the URL fragment) for an HttpOnly session cookie. */
+    /**
+     * Exchanges the launch token (from the URL fragment) for an HttpOnly cookie holding a separate
+     * random session id. The master token never goes into a cookie (cookies leak across ports).
+     */
     session: async (request: FastifyRequest<{ Body: { token: string } }>, reply: FastifyReply) => {
       if (!matches(request.body.token)) return reply.code(401).send({ error: "Unauthorized" });
       return reply
-        .setCookie(SESSION_COOKIE, token, { httpOnly: true, sameSite: "strict", path: "/", secure: false })
+        .setCookie(sessionCookieName(port()), sessions.create(), { httpOnly: true, sameSite: "strict", path: "/", secure: false })
         .code(204)
         .send();
     },
