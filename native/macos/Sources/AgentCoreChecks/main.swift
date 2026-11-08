@@ -204,6 +204,28 @@ do {
 // MARK: Elapsed time (menu bar and REC pill)
 check(Elapsed.format(0) == "0:00" && Elapsed.format(247) == "4:07" && Elapsed.format(3729) == "1:02:09" && Elapsed.format(-5) == "0:00", "elapsed time formatting")
 
+// MARK: Separate-stream recording (parts and merge plan)
+do {
+    let plan = MergePlan.place([("mic-1.mp4", 0.02, 8.58), ("mic-2.mp4", 8.5, 9.5)])
+    check(plan.count == 2 && plan[0] == .init(file: "mic-1.mp4", sourceStart: 0, duration: 8.58, at: 0.02), "first part placed at its start")
+    check(abs(plan[1].at - 8.6) < 1e-9 && abs(plan[1].sourceStart - 0.1) < 1e-9 && abs(plan[1].duration - 9.4) < 1e-9, "an overlapping restart is trimmed, never doubled")
+    let gap = MergePlan.place([("video-2.mp4", 12, 6), ("video-1.mp4", 0, 10)])
+    check(gap.map(\.file) == ["video-1.mp4", "video-2.mp4"] && gap[1].at == 12, "parts sorted by start; a gap stays a gap")
+    check(MergePlan.place([("a", 0, 5), ("b", 1, 3)]).count == 1, "a part entirely inside the previous one is skipped")
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("mr-parts-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let manifest = PartsManifest(parts: [.init(stream: "video", file: "video-1.mp4", start: 0), .init(stream: "mic", file: "mic-2.mp4", start: 9.5)])
+    try? manifest.write(to: dir)
+    check((try? PartsManifest.read(from: dir)) == manifest, "parts.json round-trips")
+    for bad in [#"{"version":1,"parts":[{"stream":"mic","file":"../meta.json","start":0}]}"#,
+                #"{"version":1,"parts":[{"stream":"camera","file":"camera-1.mp4","start":0}]}"#,
+                #"{"version":1,"parts":[{"stream":"mic","file":"mic-1.mp4","start":-1}]}"#] {
+        try? Data(bad.utf8).write(to: dir.appendingPathComponent(PartsManifest.fileName))
+        check((try? PartsManifest.read(from: dir)) == nil, "parts.json rejected: \(bad)")
+    }
+    try? FileManager.default.removeItem(at: dir)
+}
+
 // MARK: Share command
 let shareValidator = CommandValidator()
 if case .success(.share(let c)) = shareValidator.decode(#"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"share.mp4"}"#) { check(c.file == .shareMp4, "share decoded") } else { check(false, "share accepted") }

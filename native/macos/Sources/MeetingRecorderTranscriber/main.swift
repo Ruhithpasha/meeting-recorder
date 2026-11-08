@@ -4,6 +4,7 @@
 //
 //   MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale en_US] [--engine whisper --models <dir>]
 //   MeetingRecorderTranscriber --summarize <meeting dir> [--engine qwen --models <dir>]   (Summarizer.swift)
+//   MeetingRecorderTranscriber --merge <meeting dir>     parts.json streams ─▶ recording.mp4 (Merger.swift)
 //   MeetingRecorderTranscriber --export <recording.mp4> <share.mp4>                       (Exporter.swift)
 //   MeetingRecorderTranscriber --model-status --models <dir>   {"whisper":bool,"qwen":bool}
 //   MeetingRecorderTranscriber --prepare whisper|qwen --models <dir>   download (+ prepare) ahead of time
@@ -43,6 +44,16 @@ func option(_ name: String) -> String? {
 let engine = option("--engine") ?? "apple"
 let modelsDir = URL(fileURLWithPath: option("--models") ?? NSString(string: "~/.meeting-recorder/models").expandingTildeInPath)
 
+/// "The operation could not be completed" hides the cause: keep domain/code and the underlying error.
+func describe(_ error: Error) -> String {
+    let ns = error as NSError
+    var text = "\(ns.localizedDescription) [\(ns.domain) \(ns.code)]"
+    if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+        text += " caused by [\(underlying.domain) \(underlying.code)] \(underlying.localizedDescription)"
+    }
+    return text
+}
+
 /// Runs one async job and exits with its code (model downloads: 5 or 6; other errors: 4, worth retrying).
 func runJob(_ failure: String, _ body: @escaping @Sendable () async throws -> [String: Any]) -> Never {
     Task {
@@ -51,7 +62,7 @@ func runJob(_ failure: String, _ body: @escaping @Sendable () async throws -> [S
             exit(0)
         } catch {
             DownloadError.exitIfDownload(error)
-            fail(4, "\(failure): \(error.localizedDescription)")
+            fail(4, "\(failure): \(describe(error))")
         }
     }
     dispatchMain()
@@ -84,6 +95,13 @@ if args.count >= 3, args[1] == "--prepare" {
             _ = try await OpenModels.qwenRuntime(models: modelsDir)
         }
         return ["done": true]
+    }
+}
+
+if args.count >= 3, args[1] == "--merge" {
+    runJob("Merging the recording failed") {
+        let result = try await Merger.run(directory: URL(fileURLWithPath: args[2]))
+        return ["done": true, "durationSec": result.durationSec, "merged": result.merged]
     }
 }
 

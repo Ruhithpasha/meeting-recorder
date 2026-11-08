@@ -42,7 +42,7 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 ## Using it
 
 - **Automatic:** join a call. After about 3 seconds a notification says recording started, the menu-bar icon turns red with a running timer, and a small floating **REC** pill appears (drag it anywhere; click it to open the dashboard; it isn't in the recording). About 15 seconds after the call ends, the recording is saved.
-- **If the recorder fails mid-recording** (a rare macOS file-writer error that is still being tracked down), everything up to the last few seconds is kept and recording continues straight away in a new "… (continued)" meeting, for automatic and manual recordings.
+- **Built not to drop a meeting:** video, the call's audio and your mic are each recorded to their own file and joined into one `recording.mp4` when the meeting ends (in seconds, without re-encoding). If macOS's file writer fails on one of them, only that one restarts, straight away; the others keep recording.
 - **Manual:** menu bar → Start/Stop Recording, or the dashboard's button.
 - **Stopping early:** if you stop an automatic recording during a call, it won't restart until that call ends.
 - **Browser calls (Meet, Teams web):** these need the meeting tab to be the visible tab, because the app checks the window title. Joining with your mic muted at the OS level isn't detected; start those manually.
@@ -56,6 +56,7 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
   - Closing the window doesn't stop recording. To stop Meeting Recorder completely, use "Quit Meeting Recorder" in the menu bar or the app menu.
 - **Files:** one folder per meeting, for example `~/Meetings/2026-11-08_14-30-05_zoom/`:
   - `recording.mp4`: H.264 video plus two AAC tracks (others, you). It plays in QuickTime.
+  - While recording, `video-1.mp4`, `system-1.mp4`, `mic-1.mp4` and `parts.json` (each stream on its own); they're joined into `recording.mp4` when the meeting ends.
   - `meta.json`: the meeting's details.
   - `transcript.json` and `transcript.vtt`: the transcript, once it exists.
   - `summary.md` and `summary.json`: the summary, once it exists.

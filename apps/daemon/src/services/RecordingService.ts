@@ -27,6 +27,7 @@ import type { AgentPort } from "../agent/AgentChannel.ts";
 import { continuedTitle, meetingId, newMeeting } from "../models/meeting.ts";
 import type { Logger, MeetingRepository } from "../repositories/MeetingRepository.ts";
 import type { EventBus } from "./EventBus.ts";
+import type { MergeService } from "./MergeService.ts";
 import type { RecoveryService } from "./RecoveryService.ts";
 import type { StatusService } from "./StatusService.ts";
 
@@ -69,6 +70,8 @@ export interface RecordingDeps {
   settings: () => Settings;
   hasDiskSpace: () => Promise<boolean>;
   log: Logger;
+  /** Merges separately recorded streams into recording.mp4 (null: single-file recordings only). */
+  merge?: Pick<MergeService, "mergeParts"> | null;
 }
 
 export class RecordingService {
@@ -82,6 +85,9 @@ export class RecordingService {
   /** Meetings whose stop timed out: the agent may still be finishing them. */
   private readonly detached = new Set<string>();
   private queue: Promise<void> = Promise.resolve();
+  /** Recordings being finalized (merge + save) after the recorder already went idle. */
+  private readonly finalizing = new Set<string>();
+  private background: Promise<void> = Promise.resolve();
   private readonly d: RecordingDeps;
 
   constructor(deps: RecordingDeps) {
@@ -97,22 +103,24 @@ export class RecordingService {
   get isAutoStarted(): boolean { return this.state.name !== "idle" && this.state.auto; }
   /** Meetings that must not be recovered or deleted: the current one and any detached ones. */
   get busyMeetingIds(): Set<string> {
-    const ids = new Set(this.detached);
+    const ids = new Set([...this.detached, ...this.finalizing]);
     if (this.state.name !== "idle") ids.add(this.state.meeting.id);
     return ids;
   }
 
   /** Queues an event. Resolves once it (and everything before it) has been fully handled. */
+  /** Resolves after the event and any finalizing it started; the queue itself only waits for the
+   *  state change, so the next meeting can start while the last one is still being merged. */
   dispatch(event: RecordingEvent): Promise<void> {
     this.queue = this.queue
       .then(() => this.transition(event))
       .catch((error: unknown) => this.d.log.warn({ error, event }, "recording transition failed"));
-    return this.queue;
+    return this.queue.then(() => this.background);
   }
 
   /** Resolves once every event queued so far has been handled. */
   settled(): Promise<void> {
-    return this.queue;
+    return this.queue.then(() => this.background);
   }
 
   /** Menu-bar / dashboard toggle: start a manual recording when idle, otherwise stop. */
@@ -224,9 +232,8 @@ export class RecordingService {
   }
 
   private async finalizeDetached(event: Extract<RecordingEvent, { type: "agentStopped" | "agentError" }>): Promise<void> {
-    this.detached.delete(event.meetingId);
     const meeting = this.d.repo.get(event.meetingId);
-    if (!meeting) return;
+    if (!meeting) { this.detached.delete(event.meetingId); return; }
     try {
       if (event.type === "agentStopped") {
         await this.saveComplete(meeting, event.durationSec);
@@ -236,6 +243,8 @@ export class RecordingService {
       }
     } catch (error) {
       this.d.log.warn({ error, id: meeting.id }, "finalizing a detached meeting failed; recovery will retry");
+    } finally {
+      this.detached.delete(event.meetingId); // busy until finalized: recovery can't merge it at the same time
     }
   }
 
@@ -246,8 +255,23 @@ export class RecordingService {
     }, message);
   }
 
-  private async finish(meeting: Meeting, durationSec: number): Promise<void> {
-    await this.toIdleAfter(() => this.saveComplete(meeting, durationSec));
+  /** The agent stopped: the recorder is free at once; merging and saving happen in the background
+   *  (the meeting stays "busy", so crash recovery never touches it meanwhile). */
+  private finish(meeting: Meeting, durationSec: number): void {
+    this.clearTimer();
+    this.inBackground(meeting.id, () => this.saveComplete(meeting, durationSec));
+    this.set({ name: "idle" });
+  }
+
+  private inBackground(id: string, work: () => Promise<void>): void {
+    this.finalizing.add(id);
+    const done = work()
+      .catch((error: unknown) => {
+        this.d.log.warn({ error, id }, "finishing a recording failed; it will be recovered on next start");
+        this.d.status.setWarning("recording", "Couldn't finish saving the last recording. It will be recovered automatically.");
+      })
+      .finally(() => this.finalizing.delete(id));
+    this.background = Promise.all([this.background, done]).then(() => undefined);
   }
 
   /** The agent's writer failed. Recovery keeps everything up to the last saved chunk (≤5 s lost).
@@ -279,6 +303,11 @@ export class RecordingService {
   }
 
   private async saveComplete(meeting: Meeting, durationSec: number): Promise<void> {
+    // The streams were recorded separately: merge them into recording.mp4 first. If that fails
+    // the parts stay and the meeting is left for crash recovery to finish (it retries the merge).
+    const merge = this.d.merge ? await this.d.merge.mergeParts(meeting.id) : { status: "none" as const };
+    if (merge.status === "failed" || merge.status === "gave-up") throw new Error("recording parts couldn't be merged");
+    if (merge.status === "merged" && merge.durationSec !== null) durationSec = Math.round(merge.durationSec * 10) / 10; // the file's real length
     const sizeBytes = await this.d.repo.recordingSize(meeting.id);
     if (durationSec === 0 && !sizeBytes) {
       // The agent reports 0 s only when capture never produced a frame (Start then Stop at once):

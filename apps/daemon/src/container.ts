@@ -16,6 +16,7 @@ import { RecoveryService } from "./services/RecoveryService.ts";
 import { SettingsService } from "./services/SettingsService.ts";
 import { StatusService } from "./services/StatusService.ts";
 import { LiveTranscriptService } from "./services/LiveTranscriptService.ts";
+import { MergeService } from "./services/MergeService.ts";
 import { ModelService } from "./services/ModelService.ts";
 import { ShareService } from "./services/ShareService.ts";
 import { TranscriptionService, type Spawner } from "./services/TranscriptionService.ts";
@@ -70,12 +71,14 @@ export async function createContainer(o: ContainerOptions) {
   await settingsRepo.load();
 
   const settings = new SettingsService(settingsRepo);
-  const recovery = new RecoveryService(repo, o.log);
+  const merge = new MergeService({ repo, log: o.log, transcriberPath: o.transcriberPath ?? null, spawner: o.spawner });
+  const recovery = new RecoveryService(repo, o.log, merge);
   const disk = new DiskGuardService({ root: o.meetingsDir, log: o.log, freeBytes: o.freeBytes });
   const recording = new RecordingService({
     repo, agent: o.agent, status, bus, recovery, log: o.log,
     settings: () => settings.get(),
     hasDiskSpace: () => disk.hasSpace(),
+    merge,
   });
   const detection = new DetectionService({ recording, settings: () => settings.get(), log: o.log, bus });
   const meetings = new MeetingService(repo, recording, bus);

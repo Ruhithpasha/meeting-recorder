@@ -1,11 +1,14 @@
-// Screen + system audio + mic capture to a crash-safe fragmented MP4 (proven in spike/macos).
+// Screen + system audio + mic capture, each stream to its OWN crash-safe file (RecordingParts).
 //
-//   SCStream (one clock) ──┬── .screen      ─▶ FramePacer ─▶ H.264 (VideoToolbox), keyframe every 5 s ─┐
-//                          ├── .audio       ─▶ AAC track "system"                                      ─┼─▶ AVAssetWriter
-//                          └── .microphone  ─▶ AAC track "mic"                                         ─┘   fragment / 5 s
+//   SCStream (one clock) ──┬── .screen      ─▶ FramePacer ─▶ StreamWriter "video"  (H.264, keyframe / 5 s)
+//                          ├── .audio       ─▶ AudioTimeline ─▶ StreamWriter "system" (AAC stereo)
+//                          └── .microphone  ─▶ AudioTimeline ─▶ StreamWriter "mic"    (AAC mono)
+//   each writer: fragmented MP4 parts + parts.json; the daemon merges them into recording.mp4
 //
-// Two separate audio tracks (no mixing): QuickTime plays both, and transcription can tell "You"
-// (mic) from "Others" (system). The session starts on the first FRESH complete frame.
+// Writing video and audio into one file while recording failed intermittently inside AVAssetWriter
+// (-11800 / -16341) and took the whole meeting with it. Now a failing writer restarts only its own
+// stream, at the next sample. Two separate audio tracks (no mixing) let transcription tell "You"
+// (mic) from "Others" (system). The recording starts on the first FRESH complete frame.
 // All mutable state lives on `queue` (the sample handler queue); callbacks hop to the main queue.
 import AgentCore
 import AVFoundation
@@ -32,40 +35,29 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
     /// @unchecked Sendable: only touched on the recorder's serial `queue`.
     private final class Session: @unchecked Sendable {
         let meetingId: String
-        let writer: AVAssetWriter
-        let inputs: [AVAssetWriterInput]   // video, system, mic
+        let directory: URL
+        var writers: [StreamWriter] = []   // video, system, mic
+        var manifest = PartsManifest()
         var stream: SCStream?
         var pacer: FramePacer
         var startPTS: CMTime?
         var lastPTS: CMTime = .invalid
         var finishing = false
-        /// Per input (video, system, mic), for the diagnostics logged when the writer fails.
-        var appended = [0, 0, 0]
-        var lastAppended: [CMTime] = [.invalid, .invalid, .invalid]
-        var dropped = [0, 0, 0]          // timestamp not after the input's previous sample
+        var startedReported = false
         var formats: [CMFormatDescription?] = [nil, nil, nil]
+        var formatChanges = [0, 0, 0]
         var timelines = [AudioTimeline(), AudioTimeline(), AudioTimeline()] // audio inputs 1, 2
         let audioCopies = [AudioCopy(), AudioCopy(), AudioCopy()]
         var live: AnyObject?             // LiveTranscriber (macOS 26), when live transcription runs
-        var formatChanges = [0, 0, 0]
 
-        /// One line for the log: what each track had received when the writer failed.
-        func diagnostics(step: String) -> String {
-            let names = ["video", "system", "mic"]
-            let start = startPTS ?? .zero
-            let tracks = (0..<3).map { i -> String in
-                let last = lastAppended[i].isValid ? String(format: "%.2fs", CMTimeSubtract(lastAppended[i], start).seconds) : "-"
-                return "\(names[i]): \(appended[i]) samples, last \(last), \(dropped[i]) dropped, \(formatChanges[i]) format changes"
-            }
-            let error = writer.error as NSError?
-            let details = error.map { e in "\(e.domain) \(e.code) \(e.userInfo.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", "))" } ?? "none"
-            return "writer failed during \(step); status \(writer.status.rawValue); error \(details); " + tracks.joined(separator: "; ")
-        }
-        init(meetingId: String, writer: AVAssetWriter, inputs: [AVAssetWriterInput], fps: Int) {
+        init(meetingId: String, directory: URL, fps: Int) {
             self.meetingId = meetingId
-            self.writer = writer
-            self.inputs = inputs
+            self.directory = directory
             self.pacer = FramePacer(fps: fps)
+        }
+
+        func diagnostics() -> String {
+            writers.map { $0.diagnostics(start: startPTS ?? .zero) }.joined(separator: "; ")
         }
     }
 
@@ -90,8 +82,19 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
                     throw RecorderError.capture("No display found.")
                 }
                 let width = CaptureMath.evenWidth(displayWidth: display.width, displayHeight: display.height, height: height)
-                let writer = try Self.makeWriter(path: path, width: width, height: height, fps: fps)
-                let s = Session(meetingId: meetingId, writer: writer.writer, inputs: writer.inputs, fps: fps)
+                let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+                let s = Session(meetingId: meetingId, directory: directory, fps: fps)
+                let inputs = Self.inputFactories(width: width, height: height, fps: fps)
+                s.writers = zip(PartsManifest.streams, inputs).map { name, makeInput in
+                    StreamWriter(stream: name, directory: directory, makeInput: makeInput) { [weak s] part in
+                        guard let s else { return false }
+                        var next = s.manifest
+                        next.parts.append(part)
+                        do { try next.write(to: directory) } catch { Log.warn("parts.json couldn't be saved: \(error)"); return false }
+                        s.manifest = next
+                        return true
+                    }
+                }
 
                 let config = SCStreamConfiguration()
                 config.width = width
@@ -137,7 +140,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
                 if stopRequested { queue.async { self.finish(s, error: nil) } } // stop arrived during setup
             } catch {
                 queue.sync { self.preparing = nil; self.session = nil }
-                try? FileManager.default.removeItem(atPath: path)
+                // Nothing usable was recorded: remove any part already opened, and its manifest.
+                let directory = URL(fileURLWithPath: path).deletingLastPathComponent()
+                for name in PartsManifest.streams { for n in 1...9 { try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(name)-\(n).mp4")) } }
+                try? FileManager.default.removeItem(at: directory.appendingPathComponent(PartsManifest.fileName))
                 let (code, message) = Self.classify(error)
                 Log.warn("capture failed to start for \(meetingId): \(message)")
                 report { self.onError?(meetingId, code, message) }
@@ -188,11 +194,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             guard index == 0 else { return }
             let age = CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), arrival).seconds
             guard age < CaptureMath.maxFirstFrameAgeSeconds else { return } // stale cached frame
-            guard s.writer.startWriting() else { return finish(s, error: .writer(RecorderError.describe(s.writer.error))) }
-            s.writer.startSession(atSourceTime: arrival)
             s.startPTS = arrival
-            let id = s.meetingId
-            report { self.onStarted?(id) }
         }
         guard let start = s.startPTS, arrival >= start else { return }
         // Audio: placed on a continuous timeline (AudioTimeline) before the writer sees it.
@@ -201,9 +203,9 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         if index != 0 {
             guard let asbd = buffer.formatDescription.flatMap({ CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee }),
                   let placed = s.timelines[index].place(arrival: arrival, count: CMSampleBufferGetNumSamples(buffer), rate: asbd.mSampleRate),
-                  CMTimeCompare(placed, start) >= 0 else { s.dropped[index] += 1; return }
+                  CMTimeCompare(placed, start) >= 0 else { s.writers[index].dropped += 1; return }
             guard let copy = s.audioCopies[index].placed(buffer, at: placed, rate: asbd.mSampleRate, label: index == 1 ? "system" : "mic") else {
-                s.dropped[index] += 1
+                s.writers[index].dropped += 1
                 return
             }
             sample = copy
@@ -213,10 +215,11 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             }
         }
         let pts = time
-        // A sample that doesn't move its track forward is dropped rather than handed to the
-        // writer. Checked before the frame pacer, so a duplicate frame doesn't use up a slot.
-        if s.lastAppended[index].isValid, CMTimeCompare(pts, s.lastAppended[index]) <= 0 {
-            s.dropped[index] += 1
+        let writer = s.writers[index]
+        // A frame that doesn't move the video forward is dropped before the frame pacer, so a
+        // duplicate doesn't use up a slot (the writer drops any other non-advancing sample).
+        if index == 0, writer.lastAppended.isValid, CMTimeCompare(pts, writer.lastAppended) <= 0 {
+            writer.dropped += 1
             return
         }
         if index == 0, !s.pacer.accept(pts) { return }
@@ -232,14 +235,16 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             s.formats[index] = format
         }
 
-        let input = s.inputs[index]
-        if input.isReadyForMoreMediaData, input.append(sample) {
-            s.appended[index] += 1
-            s.lastAppended[index] = pts
+        if writer.append(sample, at: pts, start: start, meetingId: s.meetingId) {
             if index == 0 || CMTimeCompare(pts, s.lastPTS) > 0 { s.lastPTS = pts }
-        } else if s.writer.status == .failed {
-            Log.warn("recording \(s.meetingId): " + s.diagnostics(step: "append to input \(index)"))
-            finish(s, error: .writer(RecorderError.describe(s.writer.error)))
+            if !s.startedReported { // the first sample of any stream is in a file: tell the daemon
+                s.startedReported = true
+                let id = s.meetingId
+                report { self.onStarted?(id) }
+            }
+        } else if s.writers.allSatisfy(\.gaveUp) {
+            Log.warn("recording \(s.meetingId): every stream keeps failing; stopping. " + s.diagnostics())
+            finish(s, error: .writer("The recorder couldn't write this meeting's files."))
         }
     }
 
@@ -267,18 +272,22 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         let duration = s.startPTS.map { CMTimeSubtract(s.lastPTS, $0).seconds } ?? 0
         Task {
             try? await stream?.stopCapture()
-            let ok: Bool = await withCheckedContinuation { done in
+            // Each stream finishes its current part; a part that can't keeps its saved fragments
+            // and the daemon trims and merges it anyway.
+            // On the capture queue, as StreamWriter requires; waits for every part to finish.
+            await withCheckedContinuation { (finished: CheckedContinuation<Void, Never>) in
                 self.queue.async {
-                    guard s.writer.status == .writing else { s.writer.cancelWriting(); return done.resume(returning: false) }
-                    s.inputs.forEach { $0.markAsFinished() }
-                    s.writer.finishWriting { done.resume(returning: s.writer.status == .completed) }
+                    let group = DispatchGroup()
+                    for writer in s.writers { group.enter(); writer.finish { group.leave() } }
+                    group.notify(queue: self.queue) { finished.resume() }
                 }
             }
+            let writers: [StreamWriter] = self.queue.sync { s.writers }
             // Then the live transcript (the video is safe first), at most 10 s, before "stopped" is
             // reported so the daemon finds transcript.json. Too slow: skipped, transcribed after.
             if #available(macOS 26.0, *), let live = s.live as? LiveTranscriber, s.startPTS != nil {
                 let lines: Int?? = await withTaskGroup(of: Int??.self) { group in
-                    group.addTask { .some(await live.finish(writingTo: s.writer.outputURL.deletingLastPathComponent(), durationSec: max(0, duration))) }
+                    group.addTask { .some(await live.finish(writingTo: s.directory, durationSec: max(0, duration))) }
                     group.addTask {
                         try? await Task.sleep(for: .seconds(10))
                         if !Task.isCancelled { live.markFailed() } // too slow: never write over the after-meeting transcript
@@ -293,13 +302,11 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             // Stopped before the first frame: nothing was recorded. Not an error: remove the empty
             // file and report a 0 s stop (the daemon then removes the empty meeting).
             let neverStarted = s.startPTS == nil && error == nil
-            if neverStarted { try? FileManager.default.removeItem(at: s.writer.outputURL) }
-            let outcome: (Double?, RecorderError?) = {
-                if let error { return (nil, error) }
-                if ok || neverStarted { return (neverStarted ? 0 : max(0, duration), nil) }
-                Log.warn("recording \(id): " + self.queue.sync { s.diagnostics(step: "finishWriting") })
-                return (nil, .writer(RecorderError.describe(s.writer.error)))
-            }()
+            if neverStarted {
+                for file in writers.flatMap(\.files) { try? FileManager.default.removeItem(at: file) }
+                try? FileManager.default.removeItem(at: s.directory.appendingPathComponent(PartsManifest.fileName))
+            }
+            let outcome: (Double?, RecorderError?) = error.map { (nil, $0) } ?? (neverStarted ? 0 : max(0, duration), nil)
             let finished: ((String, Double?, RecorderError?) -> Void)? = self.queue.sync {
                 self.session = nil
                 defer { self.finished = nil }
@@ -328,32 +335,27 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         return "video \(codec) \(size.width)x\(size.height)"
     }
 
-    private static func makeWriter(path: String, width: Int, height: Int, fps: Int) throws -> (writer: AVAssetWriter, inputs: [AVAssetWriterInput]) {
-        let writer = try AVAssetWriter(outputURL: URL(fileURLWithPath: path), fileType: .mp4)
-        writer.movieFragmentInterval = CMTime(seconds: CaptureMath.fragmentSeconds, preferredTimescale: 600)
-        let video = AVAssetWriterInput(mediaType: .video, outputSettings: [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width,
-            AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: CaptureMath.videoBitrate(height: height, fps: fps),
-                AVVideoMaxKeyFrameIntervalDurationKey: CaptureMath.fragmentSeconds, // time-based, see spike
-                AVVideoExpectedSourceFrameRateKey: fps,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-            ],
-        ])
+    /// Fresh writer inputs for each stream (a restarted part gets a new one): video, system, mic.
+    private static func inputFactories(width: Int, height: Int, fps: Int) -> [() -> AVAssetWriterInput] {
+        let video = {
+            AVAssetWriterInput(mediaType: .video, outputSettings: [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: width,
+                AVVideoHeightKey: height,
+                AVVideoCompressionPropertiesKey: [
+                    AVVideoAverageBitRateKey: CaptureMath.videoBitrate(height: height, fps: fps),
+                    AVVideoMaxKeyFrameIntervalDurationKey: CaptureMath.fragmentSeconds, // time-based, see spike
+                    AVVideoExpectedSourceFrameRateKey: fps,
+                    AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                ],
+            ])
+        }
         // Speech accuracy depends on the source: 160 kbps for everyone else (stereo), 96 kbps for your mic.
-        func aac(_ channels: Int) -> [String: Any] {
-            [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: channels,
-             AVEncoderBitRateKey: channels == 2 ? 160_000 : 96_000]
+        func aac(_ channels: Int) -> () -> AVAssetWriterInput {
+            { AVAssetWriterInput(mediaType: .audio, outputSettings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000,
+                                                                       AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: channels == 2 ? 160_000 : 96_000]) }
         }
-        let inputs = [video, AVAssetWriterInput(mediaType: .audio, outputSettings: aac(2)), AVAssetWriterInput(mediaType: .audio, outputSettings: aac(1))]
-        for input in inputs {
-            input.expectsMediaDataInRealTime = true
-            guard writer.canAdd(input) else { throw RecorderError.writer("Couldn't configure the recording file.") }
-            writer.add(input)
-        }
-        return (writer, inputs)
+        return [video, aac(2), aac(1)]
     }
 
     private static func isCompleteFrame(_ buffer: CMSampleBuffer) -> Bool {
