@@ -7,6 +7,7 @@ import type { DaemonCommand, StartCommand } from "@meeting-recorder/shared";
 import type { AgentPort } from "../../src/agent/AgentChannel.ts";
 import { buildApp } from "../../src/app.ts";
 import { createContainer } from "../../src/container.ts";
+import type { Spawner } from "../../src/services/TranscriptionService.ts";
 
 export const silentLog = { info: () => {}, warn: () => {} };
 
@@ -36,7 +37,7 @@ export function tempDirs() {
   return { root, meetingsDir, stateDir, trashDir, webDist };
 }
 
-export async function makeContainer(opts: { freeBytes?: number } = {}) {
+export async function makeContainer(opts: { freeBytes?: number; transcriberPath?: string | null; spawner?: Spawner } = {}) {
   const dirs = tempDirs();
   const agent = new FakeAgent();
   const opened: string[] = [];
@@ -49,6 +50,8 @@ export async function makeContainer(opts: { freeBytes?: number } = {}) {
     openFolder: () => opened.push(dirs.meetingsDir),
     trashItem: (path) => rename(path, join(dirs.trashDir, basename(path))),
     freeBytes: async () => opts.freeBytes ?? 100 * 1024 ** 3,
+    transcriberPath: opts.transcriberPath ?? null,
+    spawner: opts.spawner,
   });
   return { container, agent, dirs, opened };
 }

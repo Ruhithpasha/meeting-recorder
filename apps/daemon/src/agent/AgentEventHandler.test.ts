@@ -62,6 +62,7 @@ describe("agent events", () => {
     const id = agent.starts[0]!.meetingId;
     await c.onAgentEvent({ type: "recording", state: "started", meetingId: id });
     expect(c.recording.stateName).toBe("recording");
+    writeFileSync(join(c.repo.root, id, "recording.mp4"), Buffer.alloc(10));
     await c.onAgentEvent({ type: "recording", state: "stopped", meetingId: id, durationSec: 3 });
     expect(c.repo.get(id)).toMatchObject({ status: "complete", durationSec: 3 });
 

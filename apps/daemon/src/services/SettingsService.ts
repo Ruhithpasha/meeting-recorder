@@ -3,6 +3,8 @@ import type { SettingsRepository } from "../repositories/SettingsRepository.ts";
 
 export class SettingsService {
   private readonly repo: SettingsRepository;
+  /** Called after every successful update (e.g. transcription resumes when it's switched on). */
+  onChange: (settings: Settings) => void = () => {};
 
   constructor(repo: SettingsRepository) {
     this.repo = repo;
@@ -16,6 +18,7 @@ export class SettingsService {
   async update(next: Settings): Promise<Settings> {
     const settings: Settings = { ...next, extraApps: [...new Set(next.extraApps.map((s) => s.trim()).filter(Boolean))] };
     await this.repo.save(settings);
+    this.onChange(settings);
     return settings;
   }
 }

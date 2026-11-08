@@ -16,4 +16,23 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test            # protocol freshness + shared, daemon, web tests
+      - run: npm run build --workspace @meeting-recorder/web
+      - run: npm run load        # 10k meetings, fails above p97.5 = 20 ms
+  agent:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift run --package-path native/macos AgentCoreChecks
+      - run: scripts/build-agent.sh "$PWD" "$RUNNER_TEMP/Meeting Recorder.app"
+  scripts:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint:sh
+      - run: npm run test:sh

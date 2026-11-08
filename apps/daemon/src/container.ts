@@ -14,6 +14,7 @@ import { RecordingService } from "./services/RecordingService.ts";
 import { RecoveryService } from "./services/RecoveryService.ts";
 import { SettingsService } from "./services/SettingsService.ts";
 import { StatusService } from "./services/StatusService.ts";
+import { TranscriptionService, type Spawner } from "./services/TranscriptionService.ts";
 
 export interface ContainerOptions {
   meetingsDir: string;
@@ -24,6 +25,9 @@ export interface ContainerOptions {
   openFolder: () => void;
   trashItem?: (path: string) => Promise<void>;
   freeBytes?: (path: string) => Promise<number>;
+  /** MeetingRecorderTranscriber inside the app bundle (MR_TRANSCRIBER); null disables transcription. */
+  transcriberPath?: string | null;
+  spawner?: Spawner;
 }
 
 export async function createContainer(o: ContainerOptions) {
@@ -49,13 +53,20 @@ export async function createContainer(o: ContainerOptions) {
   });
   const detection = new DetectionService({ recording, settings: () => settings.get(), log: o.log, bus });
   const meetings = new MeetingService(repo, recording, bus);
+  const transcription = new TranscriptionService({
+    repo, bus, recording, log: o.log, settings: () => settings.get(),
+    transcriberPath: o.transcriberPath ?? null, spawner: o.spawner,
+  });
+  settings.onChange = () => transcription.settingsChanged();
+  await transcription.init();
   const onAgentEvent = createAgentEventHandler({
     agent: o.agent, recording, detection, recovery, status, bus, log: o.log,
     dashboardUrl: o.dashboardUrl, openFolder: o.openFolder,
+    onPower: (state) => transcription.setPower(state),
   });
 
   return {
-    bus, status, repo, settings, recovery, disk, recording, detection, meetings, onAgentEvent,
+    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, onAgentEvent,
     start() {
       repo.startWatching();
       disk.start(recording, status);
@@ -64,6 +75,7 @@ export async function createContainer(o: ContainerOptions) {
       repo.stopWatching();
       disk.stop();
       detection.dispose();
+      transcription.dispose();
     },
   };
 }

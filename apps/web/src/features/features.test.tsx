@@ -185,3 +185,50 @@ describe("SettingsView", () => {
     expect(await screen.findByLabelText("Model")).toBeDisabled();
   });
 });
+
+describe("TranscriptPanel (via MeetingPlayer)", () => {
+  const transcript = {
+    version: 1, language: "en_US", durationSec: 20,
+    segments: [
+      { start: 1.2, end: 3, speaker: "Others", text: "Morning everyone." },
+      { start: 4, end: 6, speaker: "You", text: "Let's start." },
+    ],
+  };
+
+  it("shows the transcript with speakers; clicking a line seeks the video", async () => {
+    mockFetch({ [`GET /api/meetings/${meeting(1).id}/transcript`]: () => json(transcript) });
+    const { container } = render(<MeetingPlayer meeting={meeting(1, { transcript: "done" })} onDeleted={vi.fn()} />);
+    expect(await screen.findByText("Morning everyone.")).toBeInTheDocument();
+    expect(screen.getByText("You")).toBeInTheDocument();
+    const video = container.querySelector("video")!;
+    video.play = vi.fn(() => Promise.resolve());
+    await userEvent.click(screen.getByText("Let's start."));
+    expect(video.currentTime).toBe(4);
+  });
+
+  it("explains waiting, running and failed (with Retry)", async () => {
+    const calls = mockFetch({ [`POST /api/meetings/${meeting(1).id}/transcribe`]: () => json(meeting(1, { transcript: "queued" }), { status: 202 }) });
+    const { rerender } = render(<MeetingPlayer meeting={meeting(1, { transcript: "none" })} onDeleted={vi.fn()} />);
+    expect(screen.getByText(/idle and plugged in/)).toBeInTheDocument();
+    rerender(<MeetingPlayer meeting={meeting(1, { transcript: "running" })} onDeleted={vi.fn()} />);
+    expect(screen.getByText(/Transcribing on this Mac/)).toBeInTheDocument();
+    rerender(<MeetingPlayer meeting={meeting(1, { transcript: "failed" })} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(calls.at(-1)).toMatchObject({ method: "POST", path: `/api/meetings/${meeting(1).id}/transcribe` });
+  });
+
+  it("shows the server's reason when transcription is unavailable", async () => {
+    mockFetch({ [`POST /api/meetings/${meeting(1).id}/transcribe`]: () => json({ error: "Transcription needs macOS 26 or later." }, { status: 409 }) });
+    render(<MeetingPlayer meeting={meeting(1)} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Transcribe now" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("macOS 26");
+  });
+
+  it("no transcript section while recording; empty transcripts say so", async () => {
+    mockFetch({ [`GET /api/meetings/${meeting(1).id}/transcript`]: () => json({ ...transcript, segments: [] }) });
+    const { rerender } = render(<MeetingPlayer meeting={meeting(1, { status: "recording" })} onDeleted={vi.fn()} />);
+    expect(screen.queryByText("Transcript")).toBeNull();
+    rerender(<MeetingPlayer meeting={meeting(1, { transcript: "done" })} onDeleted={vi.fn()} />);
+    expect(await screen.findByText(/No speech was found/)).toBeInTheDocument();
+  });
+});

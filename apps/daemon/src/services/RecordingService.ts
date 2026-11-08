@@ -226,12 +226,20 @@ export class RecordingService {
   }
 
   private async saveComplete(meeting: Meeting, durationSec: number): Promise<void> {
+    const sizeBytes = await this.d.repo.recordingSize(meeting.id);
+    if (durationSec === 0 && !sizeBytes) {
+      // The agent reports 0 s only when capture never produced a frame (Start then Stop at once):
+      // nothing was recorded, so there is no meeting. Any other case keeps the folder.
+      await this.d.repo.deleteFolder(meeting.id);
+      this.d.bus.publish({ type: "meetingDeleted", id: meeting.id });
+      return;
+    }
     const done: Meeting = {
       ...meeting,
       status: "complete",
       endedAt: new Date().toISOString(),
       durationSec,
-      sizeBytes: await this.d.repo.recordingSize(meeting.id),
+      sizeBytes,
     };
     await this.d.repo.save(done);
     await this.d.repo.removeState(meeting.id);

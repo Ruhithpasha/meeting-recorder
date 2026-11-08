@@ -53,6 +53,7 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 - Browsers: their mic helper process **and** a window whose title matches a meeting pattern (e.g. `Meet - `), so dictation or voice chat in a browser doesn't start a recording.
 - Hysteresis: start after the match holds 3 s; stop an auto-started recording after it's gone 15 s. Manual recordings are never auto-stopped.
 - Disabled when the agent's protocol version differs.
+- ScreenCaptureKit's `captureMicrophone` reads the mic through the system service `com.apple.replayd`, not our process, so the agent ignores `replayd` as a mic user. This was verified with `MeetingRecorderAgent --mic-probe`, a diagnostic that prints which processes are using a mic.
 
 ## Security (local only)
 
@@ -66,3 +67,51 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 - No CORS headers. Strict CSP (`default-src 'self'`), `X-Frame-Options: DENY`, no-referrer.
 - No outbound network: `test/egress.test.ts` fails if booting and using the daemon connects anywhere but loopback.
 - Commands to the agent are validated against the schema before sending (e.g. `openUrl` only to the local dashboard).
+
+## Native agent (`native/macos`)
+
+| Part | Job |
+|---|---|
+| `AppController` | Wires everything; forwards facts to the daemon and executes its commands. SIGTERM (launchd/logout) terminates in order so an active recording is finalized. |
+| `Recorder` | ScreenCaptureKit: display, system audio and mic (`captureMicrophone`, on one clock) into AVAssetWriter: H.264 with a keyframe every 5 s, 2 AAC tracks, a fragment every 5 s. Starts on the first *fresh* complete frame and paces frames itself (the T1 spike showed `minimumFrameInterval` isn't honored). The slot is reserved before async setup, so a quick stop is honored and a second start is refused. |
+| `MicMonitor` | CoreAudio process objects (macOS 14+): which other apps are using a mic, event-driven through property listeners, which are removed when a process goes away. Window titles are re-read every 2 s only while some app uses a mic. A generation counter stops a slow title lookup from publishing a stale snapshot. |
+| `DaemonHost` | Spawns the pinned Node daemon, validates every command (`CommandValidator`: schema rules Codable can't express, e.g. start paths must be `<Meetings>/<id>/recording.mp4`), and restarts it with backoff (1 to 30 s). |
+| `Permissions`, `PowerMonitor` | Screen Recording preflight at launch, hourly and on wake. Sleep, wake, AC and battery. |
+| `MeetingRecorderTranscriber` | Separate executable; see below. |
+| `AgentCore` | Pure logic (wire format, validator, capture math, transcript format), checked by `swift run AgentCoreChecks`. The Command Line Tools ship without XCTest. |
+
+## Transcription (`services/TranscriptionService.ts` + `MeetingRecorderTranscriber`)
+
+```
+meeting finalized ─▶ queue (derived from meta.json: transcript none|queued; newest first)
+    gates: enabled · recorder idle · on AC power · transcriber present · one job at a time
+      └─▶ MeetingRecorderTranscriber recording.mp4 <dir>
+            per audio track (system = "Others", mic = "You"): AVAssetReader → SpeechAnalyzer + SpeechTranscriber
+            → transcript.json + transcript.vtt (atomic writes) ; stdout {"percent":n}
+    recording starts / unplugged ─▶ SIGTERM, requeue · exit 3 ─▶ unavailable (macOS < 26) · 3 failures ─▶ failed (Retry)
+```
+
+Apple's on-device SpeechTranscriber (macOS 26) replaced the planned whisper.cpp:
+
+- no CMake, prebuilt binary or 150 MB model to manage
+- the model runs in a system process, so our memory budget is untouched
+- it's built for long-form audio
+
+Measured: 11 s of speech transcribed in about 1 s, with our process using 0.05 s of CPU. macOS 15 users get everything except transcription. The job slot is reserved synchronously, so two triggers can't start two jobs.
+
+## Installer and updates (`scripts/`)
+
+`install.sh` (what `curl | bash` runs) only checks prerequisites, clones the repo and hands over to the versioned `scripts/meeting-recorder` CLI:
+
+- **Node:** pinned and SHA-256 verified, in `~/.meeting-recorder/runtime`.
+- **App bundle:** built and signed on the machine, with a local self-signed identity when you chose one (so TCC permissions survive rebuilds), otherwise ad-hoc. No hardened runtime.
+- **Startup:** a LaunchAgent with `KeepAlive` on crash only.
+- **`update` is atomic:**
+  1. clone the new version into a staging folder and build it there; the live install keeps running;
+  2. `launchctl bootout`;
+  3. swap the app folder and bundle;
+  4. `launchctl bootstrap`.
+
+  Any failure after the bootout restores the previous version (`set -E` + `ERR` trap).
+- **Refusals:** `update`, `repair` and `uninstall` refuse while a meeting is being recorded.
+- **Tests:** bats with stubbed system tools, plus real-git update tests against a local bare "remote".

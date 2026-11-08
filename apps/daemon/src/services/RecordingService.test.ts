@@ -41,6 +41,7 @@ describe("idle", () => {
     const { container: c, agent } = await makeContainer();
     await c.recording.dispatch({ type: "start", trigger: auto });
     await c.recording.dispatch({ type: "agentStarted", meetingId: agent.starts[0]!.meetingId });
+    writeRecording(join(c.repo.root, agent.starts[0]!.meetingId), Buffer.alloc(10));
     await c.recording.dispatch({ type: "stop", reason: "manual" });
     await c.recording.dispatch({ type: "agentStopped", meetingId: agent.starts[0]!.meetingId, durationSec: 1 });
     await c.recording.dispatch({ type: "start", trigger: auto });
@@ -179,7 +180,8 @@ describe("recording", () => {
 
 describe("stopping", () => {
   it("agentStopped -> complete, idle", async () => {
-    const { c, id } = await recording();
+    const { c, id, dirs } = await recording();
+    writeRecording(join(dirs.meetingsDir, id), Buffer.alloc(10));
     await c.recording.dispatch({ type: "stop", reason: "manual" });
     await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 5 });
     expect(c.recording.stateName).toBe("idle");
@@ -237,7 +239,8 @@ describe("stopping", () => {
   });
 
   it("a file I/O failure while finishing still returns to idle, with a warning", async () => {
-    const { c, id } = await recording();
+    const { c, id, dirs } = await recording();
+    writeRecording(join(dirs.meetingsDir, id), Buffer.alloc(10));
     await c.recording.dispatch({ type: "stop", reason: "manual" });
     vi.spyOn(c.repo, "save").mockRejectedValueOnce(Object.assign(new Error("disk full"), { code: "ENOSPC" }));
     await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 5 });
@@ -255,11 +258,25 @@ describe("stopping", () => {
   });
 
   it("agentStopped clears the stop timer (no late recovery)", async () => {
-    const { c, id } = await recording();
+    const { c, id, dirs } = await recording();
+    writeRecording(join(dirs.meetingsDir, id), Buffer.alloc(10));
     await c.recording.dispatch({ type: "stop", reason: "manual" });
     await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 5 });
     await vi.advanceTimersByTimeAsync(STOP_TIMEOUT_MS * 2);
     expect(c.repo.get(id)?.status).toBe("complete");
+  });
+});
+
+describe("empty stop", () => {
+  it("a stop with no recording data removes the meeting and tells the dashboard", async () => {
+    const { c, id, dirs } = await recording();
+    const events: string[] = [];
+    c.bus.subscribe((e) => { if (e.type === "meetingDeleted") events.push(e.id); });
+    await c.recording.dispatch({ type: "stop", reason: "manual" });
+    await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 0 });
+    expect(c.recording.stateName).toBe("idle");
+    expect(existsSync(join(dirs.meetingsDir, id))).toBe(false);
+    expect(events).toEqual([id]);
   });
 });
 

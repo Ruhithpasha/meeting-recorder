@@ -1,0 +1,142 @@
+// Wires the agent together. The agent reports facts (mic users, capture results, power,
+// permissions); the daemon decides (state machine, detection rules, storage).
+import AgentCore
+import AppKit
+import UserNotifications
+
+final class AppController: NSObject, NSApplicationDelegate {
+    static let version = "0.1.0"
+
+    private let menu = StatusMenu()
+    private let recorder = Recorder()
+    private let mic = MicMonitor()
+    private let permissions = Permissions()
+    private let power = PowerMonitor()
+    private var daemon: DaemonHost?
+    private var lastPermission: PermissionState = .granted
+    private var quitting = false
+    private var sigterm: DispatchSourceSignal?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        signal(SIGPIPE, SIG_IGN) // a dead daemon must not kill us through its closed stdin
+        // launchctl bootout / logout send SIGTERM: terminate in order so an active recording is
+        // finalized (applicationWillTerminate) instead of the process just dying.
+        signal(SIGTERM, SIG_IGN)
+        let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        term.setEventHandler { NSApp.terminate(nil) }
+        term.resume()
+        sigterm = term
+        guard isOnlyInstance() else { return NSApp.terminate(nil) }
+        Log.open(home: AgentConfig.defaultHome())
+        Log.info("agent \(Self.version) starting")
+
+        menu.onToggle = { [weak self] in self?.send(EventEncoder.tray(.toggle)) }
+        menu.onOpenDashboard = { [weak self] in self?.send(EventEncoder.tray(.openDashboard)) }
+        menu.onOpenFolder = { [weak self] in self?.send(EventEncoder.tray(.openFolder)) }
+        menu.onOpenPermissions = { Permissions.openScreenRecordingSettings() }
+        menu.onQuit = { [weak self] in self?.quit() }
+
+        switch AgentConfig.load() {
+        case .failure(let error):
+            Log.warn("config: \(error)")
+            menu.showError(error.description)
+            return
+        case .success(let config):
+            start(with: config)
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Never leave a file unfinished; report the result directly (main is blocked meanwhile).
+        if recorder.isBusy, let result = recorder.stopAndWait(timeout: 8) {
+            if let error = result.error {
+                send(EventEncoder.recording(.error, meetingId: result.meetingId, error: AgentError(code: error.code, message: error.message)))
+            } else {
+                send(EventEncoder.recording(.stopped, meetingId: result.meetingId, durationSec: result.durationSec ?? 0))
+            }
+            Thread.sleep(forTimeInterval: 0.3) // let the daemon read it before stdin closes
+        }
+        daemon?.stop()
+        Log.info("agent stopped")
+    }
+
+    private func start(with config: AgentConfig) {
+        let transcriber = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MeetingRecorderTranscriber").path
+        let host = DaemonHost(config: config, transcriberPath: FileManager.default.isExecutableFile(atPath: transcriber) ? transcriber : nil)
+        daemon = host
+        host.onStarted = { [weak self] in self?.sendHello() }
+        host.onCommand = { [weak self] in self?.handle($0) }
+        host.onFatal = { [weak self] in self?.menu.showError($0) }
+
+        recorder.onStarted = { [weak self] id in
+            self?.send(EventEncoder.recording(.started, meetingId: id))
+            Self.notify(title: "Recording started", body: "Meeting Recorder is recording your screen and audio.")
+        }
+        recorder.onStopped = { [weak self] id, duration in self?.send(EventEncoder.recording(.stopped, meetingId: id, durationSec: duration)) }
+        recorder.onError = { [weak self] id, code, message in
+            self?.send(EventEncoder.recording(.error, meetingId: id, error: AgentError(code: code, message: message)))
+        }
+        mic.onChange = { [weak self] snapshot in self?.send(EventEncoder.mic(users: snapshot.users, windows: snapshot.windows)) }
+        permissions.onScreenChange = { [weak self] state in
+            self?.lastPermission = state
+            self?.menu.setPermissionMissing(state == .denied)
+            self?.send(EventEncoder.permission(state))
+        }
+        power.onChange = { [weak self] state in
+            if state == .resume { self?.permissions.check() }
+            self?.send(EventEncoder.power(state))
+        }
+
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+        host.start()
+        permissions.start()
+        power.start()
+        mic.start()
+    }
+
+    /// First line to every (re)started daemon, followed by the current facts it needs.
+    private func sendHello() {
+        send(EventEncoder.hello(agentVersion: Self.version, activeMeetingId: recorder.activeMeetingId))
+        send(EventEncoder.permission(lastPermission))
+        send(EventEncoder.power(power.current))
+        mic.resend()
+    }
+
+    private func handle(_ command: DaemonCommand) {
+        switch command {
+        case .start(let c): recorder.start(meetingId: c.meetingId, path: c.path, height: c.height, fps: c.fps)
+        case .stop(let c): recorder.stop(meetingId: c.meetingId)
+        case .state(let c):
+            menu.render(status: c.status, label: c.label)
+            if quitting, c.status == .idle { NSApp.terminate(nil) }
+        case .openUrl(let c):
+            if let url = URL(string: c.url) { NSWorkspace.shared.open(url) }
+        }
+    }
+
+    private func send(_ line: String) {
+        daemon?.send(line)
+    }
+
+    /// Quit finishes an active recording first: the daemon stops it and we exit on its idle state.
+    private func quit() {
+        guard recorder.isBusy else { return NSApp.terminate(nil) }
+        quitting = true
+        send(EventEncoder.tray(.quit))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { NSApp.terminate(nil) } // bounded
+    }
+
+    private func isOnlyInstance() -> Bool {
+        guard let id = Bundle.main.bundleIdentifier else { return true }
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: id).filter { $0 != .current }
+        return others.isEmpty
+    }
+
+    private static func notify(title: String, body: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return } // not running as an .app bundle
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+}

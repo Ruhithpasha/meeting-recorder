@@ -280,3 +280,24 @@ describe("events (SSE)", () => {
     await app.close();
   });
 });
+
+describe("transcript API", () => {
+  it("GET transcript: 404 until done, then the JSON file", async () => {
+    const { app, id, container, dirs } = await withMeeting();
+    expect((await app.inject({ url: `/api/meetings/${id}/transcript`, headers: AUTH })).statusCode).toBe(404);
+    writeFileSync(join(dirs.meetingsDir, id, "transcript.json"), JSON.stringify({ version: 1, segments: [{ start: 0, end: 1, speaker: "You", text: "hi" }] }));
+    await container.repo.save({ ...container.repo.get(id)!, transcript: "done" });
+    const res = await app.inject({ url: `/api/meetings/${id}/transcript`, headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(res.json().segments[0].text).toBe("hi");
+  });
+
+  it("POST transcribe: 409 with a reason when transcription is unavailable, 400 for bad ids", async () => {
+    const { app, id } = await withMeeting(); // harness has no transcriber binary
+    const res = await app.inject({ method: "POST", url: `/api/meetings/${id}/transcribe`, headers: AUTH });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatch(/isn't installed/);
+    expect((await app.inject({ method: "POST", url: "/api/meetings/nope/transcribe", headers: AUTH })).statusCode).toBe(400);
+  });
+});

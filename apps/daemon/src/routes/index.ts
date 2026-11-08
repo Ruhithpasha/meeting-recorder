@@ -41,5 +41,7 @@ export async function registerRoutes(app: FastifyInstance, c: Container, token: 
   app.get("/api/meetings/:id", { schema: { params: idParams } }, meetings.get);
   app.get("/api/meetings/:id/media", { schema: { params: idParams } }, meetings.media);
   app.post("/api/meetings/:id/stop", { schema: { params: idParams } }, meetings.stop);
+  app.get("/api/meetings/:id/transcript", { schema: { params: idParams } }, meetings.transcript);
+  app.post("/api/meetings/:id/transcribe", { schema: { params: idParams } }, meetings.transcribe);
   app.delete("/api/meetings/:id", { schema: { params: idParams } }, meetings.remove);
 }

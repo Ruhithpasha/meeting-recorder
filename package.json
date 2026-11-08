@@ -17,7 +17,9 @@
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run check:protocol && npm run test --workspaces --if-present",
-    "load": "node load/list-meetings.ts"
+    "load": "node load/list-meetings.ts",
+    "lint:sh": "shellcheck -x scripts/install.sh scripts/meeting-recorder scripts/build-agent.sh scripts/create-signing-cert.sh",
+    "test:sh": "bats scripts/test"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -25,6 +27,8 @@
     "typescript": "^7.0.0",
     "vitest": "^5.1.0",
     "autocannon": "^9.0.0",
-    "@types/autocannon": "^7.12.0"
+    "@types/autocannon": "^7.12.0",
+    "shellcheck": "^4.1.0",
+    "bats": "^1.13.0"
   }
 }

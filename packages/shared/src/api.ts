@@ -45,6 +45,14 @@ export const DEFAULT_SETTINGS: Settings = {
   extraApps: [],
 };
 
+/** transcript.json written by the on-device transcriber (one timeline, speaker per track). */
+export interface Transcript {
+  version: 1;
+  language: string;
+  durationSec: number;
+  segments: { start: number; end: number; speaker: string; text: string }[];
+}
+
 /** Server-Sent Events pushed to the dashboard on /api/events. */
 export type ServerEvent =
   | { type: "status"; status: Status }

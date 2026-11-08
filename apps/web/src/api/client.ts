@@ -1,5 +1,5 @@
 // Typed client for the daemon's API. Same origin, so the HttpOnly session cookie rides along.
-import type { Meeting, MeetingPage, Settings, Status } from "@meeting-recorder/shared";
+import type { Meeting, MeetingPage, Settings, Status, Transcript } from "@meeting-recorder/shared";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -37,4 +37,6 @@ export const api = {
   getSettings: () => request<Settings>("/api/settings"),
   putSettings: (settings: Settings) => request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   mediaUrl: (id: string) => `/api/meetings/${encodeURIComponent(id)}/media`,
+  getTranscript: (id: string) => request<Transcript>(`/api/meetings/${encodeURIComponent(id)}/transcript`),
+  transcribe: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/transcribe`, { method: "POST" }),
 };

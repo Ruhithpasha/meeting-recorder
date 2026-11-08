@@ -1,6 +1,6 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Container } from "../container.ts";
-import { conflict } from "../lib/errors.ts";
+import { conflict, notFound } from "../lib/errors.ts";
 
 type IdRequest = FastifyRequest<{ Params: { id: string } }>;
 type ListRequest = FastifyRequest<{ Querystring: { cursor?: string; limit?: number } }>;
@@ -26,6 +26,16 @@ export function meetingsController(c: Container) {
       if (c.recording.stateName !== "idle") throw conflict("Already recording.");
       await c.recording.dispatch({ type: "start", trigger: { app: "Manual", title: "Manual recording", source: "manual" } });
       return reply.code(202).send(c.status.get());
+    },
+
+    transcript: async (request: IdRequest, reply: FastifyReply) => {
+      const meeting = c.meetings.get(request.params.id);
+      if (meeting.transcript !== "done") throw notFound("Transcript");
+      return reply.header("cache-control", "no-store").type("application/json").sendFile("transcript.json", c.repo.dir(meeting.id));
+    },
+
+    transcribe: async (request: IdRequest, reply: FastifyReply) => {
+      return reply.code(202).send(await c.transcription.enqueue(request.params.id));
     },
 
     stop: async (request: IdRequest, reply: FastifyReply) => {
