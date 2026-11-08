@@ -1,0 +1,248 @@
+// HTTP integration tests through fastify.inject: real routes, controllers, services, temp folders.
+import { writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import type { AddressInfo } from "node:net";
+import { join } from "node:path";
+import { DEFAULT_SETTINGS } from "@meeting-recorder/shared";
+import { describe, expect, it, vi } from "vitest";
+import { buildApp } from "../src/app.ts";
+import { AUTH, HOST, makeApp, makeContainer, TEST_TOKEN } from "./helpers/harness.ts";
+
+async function withMeeting() {
+  const ctx = await makeApp();
+  await ctx.container.recording.toggle();
+  const id = ctx.agent.starts[0]!.meetingId;
+  await ctx.container.recording.dispatch({ type: "agentStarted", meetingId: id });
+  writeFileSync(join(ctx.dirs.meetingsDir, id, "recording.mp4"), Buffer.from("0123456789abcdefghij"));
+  await ctx.container.recording.dispatch({ type: "stop", reason: "manual" });
+  await ctx.container.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 2 });
+  return { ...ctx, id };
+}
+
+describe("security", () => {
+  it("rejects a foreign Host header (DNS rebinding) even with a valid token", async () => {
+    const { app } = await makeApp();
+    for (const host of ["evil.example.com", "127.0.0.1:9999", "localhost"]) {
+      const res = await app.inject({ url: "/api/status", headers: { ...AUTH, host } });
+      expect(res.statusCode).toBe(403);
+    }
+  });
+
+  it("requires the token on /api/* (no token, wrong token)", async () => {
+    const { app } = await makeApp();
+    expect((await app.inject({ url: "/api/status", headers: HOST })).statusCode).toBe(401);
+    expect((await app.inject({ url: "/api/status", headers: { ...HOST, authorization: "Bearer nope" } })).statusCode).toBe(401);
+    expect((await app.inject({ url: "/api/status", headers: AUTH })).statusCode).toBe(200);
+  });
+
+  it.each(["/%61pi/status", "/%61pi/meetings", "/api/%6Deetings", "/%61%70%69/settings"])(
+    "percent-encoded path %s cannot bypass the token check", async (url) => {
+      const { app } = await makeApp();
+      const res = await app.inject({ url, headers: HOST });
+      expect(res.statusCode).toBe(401);
+    });
+
+  it("a percent-encoded POST cannot start a recording without the token", async () => {
+    const { app, agent } = await makeApp();
+    const res = await app.inject({ method: "POST", url: "/%61pi/meetings", headers: HOST });
+    expect(res.statusCode).toBe(401);
+    expect(agent.starts).toHaveLength(0);
+  });
+
+  it("session: exchanges the token for an HttpOnly SameSite=Strict cookie that then authorizes", async () => {
+    const { app } = await makeApp();
+    const bad = await app.inject({ method: "POST", url: "/api/session", headers: HOST, payload: { token: "wrong" } });
+    expect(bad.statusCode).toBe(401);
+    const res = await app.inject({ method: "POST", url: "/api/session", headers: HOST, payload: { token: TEST_TOKEN } });
+    expect(res.statusCode).toBe(204);
+    const cookie = res.headers["set-cookie"] as string;
+    expect(cookie).toMatch(/mr_session=/);
+    expect(cookie).toMatch(/HttpOnly/);
+    expect(cookie).toMatch(/SameSite=Strict/);
+    const status = await app.inject({ url: "/api/status", headers: { ...HOST, cookie: cookie.split(";")[0]! } });
+    expect(status.statusCode).toBe(200);
+  });
+
+  it("sends a strict CSP and no CORS headers", async () => {
+    const { app } = await makeApp();
+    const res = await app.inject({ url: "/", headers: { ...HOST, origin: "https://evil.example.com" } });
+    expect(res.headers["content-security-policy"]).toContain("default-src 'self'");
+    expect(res.headers["content-security-policy"]).toContain("connect-src 'self'");
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+    expect(res.headers["x-frame-options"]).toBe("DENY");
+  });
+
+  it("the dashboard shell and assets are public (they contain no data)", async () => {
+    const { app } = await makeApp();
+    const index = await app.inject({ url: "/", headers: HOST });
+    expect(index.statusCode).toBe(200);
+    expect(index.headers["cache-control"]).toBe("no-cache");
+    const asset = await app.inject({ url: "/assets/app-abc123.js", headers: HOST });
+    expect(asset.headers["cache-control"]).toContain("immutable");
+    const deepLink = await app.inject({ url: "/meetings/whatever", headers: HOST });
+    expect(deepLink.statusCode).toBe(200);
+    expect(deepLink.body).toContain("Meeting Recorder");
+  });
+
+  it("unknown API paths are JSON 404s, not the SPA shell", async () => {
+    const { app } = await makeApp();
+    const res = await app.inject({ url: "/api/nope", headers: AUTH });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "Not found" });
+  });
+});
+
+describe("meetings API", () => {
+  it("GET /api/meetings lists newest first; validates cursor and limit", async () => {
+    const { app, id } = await withMeeting();
+    const res = await app.inject({ url: "/api/meetings", headers: AUTH });
+    expect(res.json()).toMatchObject({ items: [{ id, status: "complete", durationSec: 2 }], nextCursor: null });
+    expect((await app.inject({ url: "/api/meetings?limit=0", headers: AUTH })).statusCode).toBe(400);
+    expect((await app.inject({ url: "/api/meetings?limit=101", headers: AUTH })).statusCode).toBe(400);
+    expect((await app.inject({ url: "/api/meetings?cursor=../../etc", headers: AUTH })).statusCode).toBe(400);
+  });
+
+  it("GET /api/meetings/:id: 200, 404, and 400 for a traversal attempt", async () => {
+    const { app, id } = await withMeeting();
+    expect((await app.inject({ url: `/api/meetings/${id}`, headers: AUTH })).json()).toMatchObject({ id });
+    expect((await app.inject({ url: "/api/meetings/2020-01-01_00-00-00_none", headers: AUTH })).statusCode).toBe(404);
+    expect((await app.inject({ url: "/api/meetings/..%2F..%2Fetc", headers: AUTH })).statusCode).toBe(400);
+  });
+
+  it("GET media streams with Range support (seeking)", async () => {
+    const { app, id } = await withMeeting();
+    const full = await app.inject({ url: `/api/meetings/${id}/media`, headers: AUTH });
+    expect(full.statusCode).toBe(200);
+    expect(full.headers["accept-ranges"]).toBe("bytes");
+    const part = await app.inject({ url: `/api/meetings/${id}/media`, headers: { ...AUTH, range: "bytes=10-14" } });
+    expect(part.statusCode).toBe(206);
+    expect(part.body).toBe("abcde");
+    const bad = await app.inject({ url: `/api/meetings/${id}/media`, headers: { ...AUTH, range: "bytes=999-" } });
+    expect(bad.statusCode).toBe(416);
+  });
+
+  it("GET media is 404 when the recording file is missing", async () => {
+    const { app, container, agent } = await makeApp();
+    await container.recording.toggle();
+    const res = await app.inject({ url: `/api/meetings/${agent.starts[0]!.meetingId}/media`, headers: AUTH });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("POST start (202) then 409 while recording; stop requires the active id", async () => {
+    const { app, agent, container } = await makeApp();
+    const start = await app.inject({ method: "POST", url: "/api/meetings", headers: AUTH });
+    expect(start.statusCode).toBe(202);
+    expect(start.json()).toMatchObject({ state: "starting" });
+    expect((await app.inject({ method: "POST", url: "/api/meetings", headers: AUTH })).statusCode).toBe(409);
+    const id = agent.starts[0]!.meetingId;
+    await container.recording.dispatch({ type: "agentStarted", meetingId: id });
+    expect((await app.inject({ method: "POST", url: "/api/meetings/2020-01-01_00-00-00_x/stop", headers: AUTH })).statusCode).toBe(409);
+    const stop = await app.inject({ method: "POST", url: `/api/meetings/${id}/stop`, headers: AUTH });
+    expect(stop.statusCode).toBe(202);
+    expect(stop.json()).toMatchObject({ state: "stopping" });
+  });
+
+  it("DELETE moves to trash (204), is 409 while recording, 404 when unknown", async () => {
+    const { app, id, container, dirs } = await withMeeting();
+    const del = await app.inject({ method: "DELETE", url: `/api/meetings/${id}`, headers: AUTH });
+    expect(del.statusCode).toBe(204);
+    expect(container.repo.get(id)).toBeUndefined();
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(dirs.trashDir, id))).toBe(true);
+    expect((await app.inject({ method: "DELETE", url: `/api/meetings/${id}`, headers: AUTH })).statusCode).toBe(404);
+
+    await container.recording.toggle();
+    const live = container.recording.currentMeetingId!;
+    expect((await app.inject({ method: "DELETE", url: `/api/meetings/${live}`, headers: AUTH })).statusCode).toBe(409);
+  });
+
+  it("DELETE is 409 for a detached meeting the recorder may still be writing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { app, container, agent } = await makeApp();
+      await container.recording.toggle();
+      const id = agent.starts[0]!.meetingId;
+      await container.recording.dispatch({ type: "agentStarted", meetingId: id });
+      await container.recording.dispatch({ type: "stop", reason: "manual" });
+      await vi.advanceTimersByTimeAsync(20_000);
+      await container.recording.settled();
+      expect(container.recording.stateName).toBe("idle");
+      expect((await app.inject({ method: "DELETE", url: `/api/meetings/${id}`, headers: AUTH })).statusCode).toBe(409);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("settings API", () => {
+  it("GET returns defaults; PUT validates, persists, and de-duplicates extra apps", async () => {
+    const { app, dirs } = await makeApp();
+    expect((await app.inject({ url: "/api/settings", headers: AUTH })).json()).toEqual(DEFAULT_SETTINGS);
+    const next = { ...DEFAULT_SETTINGS, autoRecord: false, extraApps: ["com.hnc.Discord", "com.hnc.Discord", " "] };
+    const bad = await app.inject({ method: "PUT", url: "/api/settings", headers: AUTH, payload: { ...next, extraApps: [" "] } });
+    expect(bad.statusCode).toBe(400);
+    const ok = await app.inject({ method: "PUT", url: "/api/settings", headers: AUTH, payload: { ...next, extraApps: ["com.hnc.Discord", "com.hnc.Discord"] } });
+    expect(ok.json()).toMatchObject({ autoRecord: false, extraApps: ["com.hnc.Discord"] });
+    const { readFileSync, statSync } = await import("node:fs");
+    expect(JSON.parse(readFileSync(join(dirs.stateDir, "settings.json"), "utf8")).autoRecord).toBe(false);
+    expect(statSync(join(dirs.stateDir, "settings.json")).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([
+    [{ quality: "8k" }],
+    [{ transcription: { enabled: true, model: "huge" } }],
+    [{ extraApps: ["rm -rf /"] }],
+    [{ surprise: true }],
+  ])("PUT rejects %j", async (patch) => {
+    const { app } = await makeApp();
+    const res = await app.inject({ method: "PUT", url: "/api/settings", headers: AUTH, payload: { ...DEFAULT_SETTINGS, ...patch } });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe("shutdown", () => {
+  it("app.close() finishes promptly even with an open dashboard event stream", async () => {
+    const ctx = await makeContainer();
+    let port = 0;
+    const app = await buildApp({ container: ctx.container, token: TEST_TOKEN, port: () => port, webDist: ctx.dirs.webDist });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    port = (app.server.address() as AddressInfo).port;
+    await new Promise<void>((resolve) => {
+      const req = httpRequest({ host: "127.0.0.1", port, path: "/api/events", headers: { authorization: `Bearer ${TEST_TOKEN}` } }, (res) => {
+        res.once("data", () => resolve()); // stream is open
+        res.on("error", () => {});
+      });
+      req.on("error", () => {});
+      req.end();
+    });
+    const started = Date.now();
+    await app.close();
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe("events (SSE)", () => {
+  it("streams the current status, then changes", async () => {
+    const ctx = await makeContainer();
+    let port = 0;
+    const app = await buildApp({ container: ctx.container, token: TEST_TOKEN, port: () => port, webDist: ctx.dirs.webDist });
+    await app.listen({ host: "127.0.0.1", port: 0 });
+    port = (app.server.address() as AddressInfo).port;
+    const chunks: string[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port, path: "/api/events", headers: { authorization: `Bearer ${TEST_TOKEN}` } }, (res) => {
+        expect(res.headers["content-type"]).toBe("text/event-stream");
+        res.on("data", (d: Buffer) => {
+          chunks.push(d.toString());
+          if (chunks.length === 1) void ctx.container.recording.toggle();
+          if (chunks.join("").includes('"type":"meeting"')) { req.destroy(); resolve(); }
+        });
+      });
+      req.on("error", (e) => (e.message.includes("aborted") || e.message.includes("socket hang up") ? resolve() : reject(e)));
+      req.end();
+    });
+    expect(chunks[0]).toContain('"state":"idle"');
+    expect(chunks.join("")).toContain('"state":"starting"');
+    await app.close();
+  });
+});

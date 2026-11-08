@@ -1,0 +1,27 @@
+{
+  "name": "@meeting-recorder/web",
+  "private": true,
+  "type": "module",
+  "description": "Dashboard: list, play and delete recordings, live recording status, settings. Served by the daemon on 127.0.0.1.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@meeting-recorder/shared": "*",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "jsdom": "^31.0.0",
+    "vite": "^8.3.6"
+  }
+}

@@ -6,13 +6,15 @@
   "scripts": {
     "start": "node src/index.ts",
     "typecheck": "tsc -p .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",
     "@fastify/static": "^10.1.10",
     "@meeting-recorder/shared": "*",
     "fastify": "^5.12.8",
-    "trash": "^10.1.1"
+    "trash": "^10.1.1",
+    "ajv": "^8.20.0",
+    "pino": "^10.4.0"
   }
 }

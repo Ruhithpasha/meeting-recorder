@@ -3,3 +3,7 @@ spike/macos/probe
 *.mp4
 .DS_Store
 node_modules/
+.gstack/
+native/macos/.build/
+apps/web/dist/
+dist/

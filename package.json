@@ -16,12 +16,15 @@
     "check:protocol": "node scripts/gen-protocol.mjs --check",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run check:protocol && npm run test --workspaces --if-present"
+    "test": "npm run check:protocol && npm run test --workspaces --if-present",
+    "load": "node load/list-meetings.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "quicktype": "^26.0.0",
     "typescript": "^7.0.0",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "autocannon": "^9.0.0",
+    "@types/autocannon": "^7.12.0"
   }
 }

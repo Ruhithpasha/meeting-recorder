@@ -1,0 +1,28 @@
+{
+  "$comment": "Which apps auto-start a recording when they use the microphone. Native apps match on mic use alone. Browsers use the mic from helper processes, so they also need a window whose title looks like a meeting. Bundle ids ending in * are prefix matches. PRs welcome for more apps.",
+  "rules": [
+    { "label": "Zoom", "micBundleIds": ["us.zoom.xos*"] },
+    { "label": "Microsoft Teams", "micBundleIds": ["com.microsoft.teams2*", "com.microsoft.teams*"] },
+    { "label": "Webex", "micBundleIds": ["Cisco-Systems.Spark*", "com.webex.meetingmanager*"] },
+    { "label": "Slack huddle", "micBundleIds": ["com.tinyspeck.slackmacgap*"] },
+    { "label": "FaceTime", "micBundleIds": ["com.apple.FaceTime"] },
+    {
+      "label": "Browser",
+      "micBundleIds": [
+        "com.google.Chrome*", "com.apple.WebKit.GPU", "com.apple.Safari*", "com.microsoft.edgemac*",
+        "org.mozilla.firefox*", "company.thebrowser.Browser*", "com.brave.Browser*", "com.vivaldi.Vivaldi*", "com.operasoftware.Opera*"
+      ],
+      "windowBundleIds": [
+        "com.google.Chrome*", "com.apple.Safari*", "com.microsoft.edgemac*", "org.mozilla.firefox*",
+        "company.thebrowser.Browser*", "com.brave.Browser*", "com.vivaldi.Vivaldi*", "com.operasoftware.Opera*"
+      ],
+      "titles": [
+        { "pattern": "^Meet [-–] |Google Meet", "label": "Google Meet" },
+        { "pattern": "Microsoft Teams", "label": "Microsoft Teams" },
+        { "pattern": "Zoom Meeting|zoom\\.us|Zoom Workplace", "label": "Zoom" },
+        { "pattern": "Webex", "label": "Webex" },
+        { "pattern": "Whereby|Jitsi Meet|Around|Gather", "label": "Video call" }
+      ]
+    }
+  ]
+}

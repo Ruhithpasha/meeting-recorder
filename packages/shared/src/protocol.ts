@@ -41,6 +41,9 @@ function parseWith<T>(validate: ValidateFunction<T>, line: string): ParseResult<
   return { ok: false, error: first ? `${first.instancePath || "/"} ${first.message}` : "schema mismatch" };
 }
 
+/** Meeting folder name rule, from the schema so the daemon and the agent's validator agree. */
+export const MEETING_ID_PATTERN = new RegExp(schema.definitions.MeetingId.pattern);
+
 export const parseAgentEvent = (line: string): ParseResult<AgentEvent> => parseWith(validators.agentEvent, line);
 export const parseDaemonCommand = (line: string): ParseResult<DaemonCommand> => parseWith(validators.daemonCommand, line);
 
