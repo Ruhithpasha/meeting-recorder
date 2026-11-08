@@ -29,6 +29,9 @@ export function meetingsController(c: Container) {
       return reply.code(202).send(c.status.get());
     },
 
+    /** Live transcript lines so far (the meeting being recorded, or just ended). */
+    live: async (request: IdRequest) => c.live.get(c.meetings.get(request.params.id).id),
+
     share: async (request: FastifyRequest<{ Params: { id: string }; Body: { what: ShareWhat } }>, reply: FastifyReply) =>
       reply.code(202).send(await c.share.share(request.params.id, request.body.what)),
 

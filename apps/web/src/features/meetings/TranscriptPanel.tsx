@@ -70,7 +70,7 @@ export function TranscriptPanel({ meeting, onSeek }: { meeting: Meeting; onSeek:
   } else {
     body = (
       <div className="flex flex-wrap items-center gap-2.5 text-sm text-muted-foreground">
-        <p>The transcript is made on this Mac when it's idle and plugged in.</p>
+        <p>The transcript is made on this Mac after the meeting.</p>
         <Button variant="outline" size="sm" disabled={retrying} onClick={retry}>{retrying ? "Queuing…" : "Transcribe now"}</Button>
         {error && <span className="text-destructive" role="alert">{error}</span>}
       </div>

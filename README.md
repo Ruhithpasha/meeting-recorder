@@ -41,7 +41,8 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 
 ## Using it
 
-- **Automatic:** join a call. After about 3 seconds the menu-bar icon turns red and a notification says recording started. About 15 seconds after the call ends, the recording is saved.
+- **Automatic:** join a call. After about 3 seconds a notification says recording started, the menu-bar icon turns red with a running timer, and a small floating **REC** pill appears (drag it anywhere; click it to open the dashboard; it isn't in the recording). About 15 seconds after the call ends, the recording is saved.
+- **If the recorder fails mid-call**, everything up to that point is kept and recording continues straight away in a new "… (continued)" meeting.
 - **Manual:** menu bar → Start/Stop Recording, or the dashboard's button.
 - **Stopping early:** if you stop an automatic recording during a call, it won't restart until that call ends.
 - **Browser calls (Meet, Teams web):** these need the meeting tab to be the visible tab, because the app checks the window title. Joining with your mic muted at the OS level isn't detected; start those manually.
@@ -62,9 +63,9 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 
 ### Transcripts and summaries
 
-After a meeting is saved, Meeting Recorder transcribes it with Apple's on-device speech engine. It then writes a **summary** (overview, key points, decisions, action items with owners) with Apple's on-device language model.
+**Live:** on macOS 26 the meeting is transcribed while it happens (Apple's on-device model). The dashboard shows each line as people speak, and the transcript is ready the moment the meeting ends. Otherwise, after a meeting is saved, Meeting Recorder transcribes it with Apple's on-device speech engine. It then writes a **summary** (overview, key points, decisions, action items with owners) with Apple's on-device language model.
 
-- Both run **only** when you're not recording and your Mac is plugged in.
+- After-meeting jobs (Whisper, summaries) run when you're not recording, at low priority, on battery too.
 - Nothing leaves your Mac.
 - The summary appears above the transcript in the dashboard, with a **Copy** button (Markdown), and is saved as `summary.md` next to the recording.
 - "You" and "Others" come from the two separate audio tracks, so the labels are exact rather than guessed.
@@ -80,7 +81,7 @@ After a meeting is saved, Meeting Recorder transcribes it with Apple's on-device
 
 ### Open models (optional)
 
-In Settings you can swap Apple's models for open models from Hugging Face. Pick one and press **Download now** to download it with a progress bar, or let it download before the first meeting that needs it. Whisper is also prepared for your Mac's chip after downloading (a few minutes, once). **Cancel** stops a download; what's already downloaded is kept, so the next download carries on, and meetings that need the model wait until you download it. Each downloads **once** into `~/.meeting-recorder/models` (pinned version, checked against its fingerprint), then runs only on your Mac, at background priority, when it's idle and plugged in. No meeting content is ever uploaded.
+In Settings you can swap Apple's models for open models from Hugging Face. Pick one and press **Download now** to download it with a progress bar, or let it download before the first meeting that needs it. Whisper is also prepared for your Mac's chip after downloading (a few minutes, once). **Cancel** stops a download; what's already downloaded is kept, so the next download carries on, and meetings that need the model wait until you download it. Each downloads **once** into `~/.meeting-recorder/models` (pinned version, checked against its fingerprint), then runs only on your Mac, at background priority, when you're not recording. No meeting content is ever uploaded.
 
 | Engine | For | Download | Measured on an M2 (16 GB) |
 |---|---|---|---|

@@ -1,5 +1,5 @@
 // Table test for the recording state machine (see the diagram in RecordingService.ts).
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appleFragmented } from "../../test/helpers/mp4Builder.ts";
@@ -316,5 +316,45 @@ describe("menu bar state", () => {
     await c.recording.dispatch({ type: "stop", reason: "manual" });
     await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 1 });
     expect(agent.last("state")).toEqual({ cmd: "state", status: "idle" });
+  });
+});
+
+describe("live transcript", () => {
+  it("asks the agent for a live transcript in the meeting language, only when transcription is on", async () => {
+    const { agent, c } = await started();
+    expect(agent.starts[0]!.liveLocale).toBe("auto");
+    await c.recording.dispatch({ type: "agentStarted", meetingId: agent.starts[0]!.meetingId });
+    await c.recording.toggle();
+    await c.recording.dispatch({ type: "agentStopped", meetingId: agent.starts[0]!.meetingId, durationSec: 3 });
+    await c.settings.update({ ...c.settings.get(), transcription: { ...c.settings.get().transcription, enabled: false } });
+    await c.recording.dispatch({ type: "start", trigger: manual });
+    expect(agent.starts[1]!.liveLocale).toBeUndefined();
+  });
+
+  it("with Apple's engine, the live transcript.json is the transcript: done the moment the meeting ends", async () => {
+    const { c, id, dirs } = await recording();
+    writeFileSync(join(dirs.meetingsDir, id, "recording.mp4"), "video");
+    writeFileSync(join(dirs.meetingsDir, id, "transcript.json"), '{"version":1,"language":"en","durationSec":3,"segments":[]}');
+    await c.recording.toggle();
+    await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 3 });
+    expect(c.repo.get(id)?.transcript).toBe("done");
+  });
+
+  it("with Whisper, the live transcript is kept only until Whisper's replaces it (job still runs)", async () => {
+    const { c, id, dirs } = await recording();
+    await c.settings.update({ ...c.settings.get(), transcription: { ...c.settings.get().transcription, engine: "whisper" } });
+    writeFileSync(join(dirs.meetingsDir, id, "recording.mp4"), "video");
+    writeFileSync(join(dirs.meetingsDir, id, "transcript.json"), '{"version":1,"language":"en","durationSec":3,"segments":[]}');
+    await c.recording.toggle();
+    await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 3 });
+    expect(c.repo.get(id)?.transcript).toBe("none");
+  });
+
+  it("no live transcript (older macOS): the usual after-meeting job does it", async () => {
+    const { c, id, dirs } = await recording();
+    writeFileSync(join(dirs.meetingsDir, id, "recording.mp4"), "video");
+    await c.recording.toggle();
+    await c.recording.dispatch({ type: "agentStopped", meetingId: id, durationSec: 3 });
+    expect(c.repo.get(id)?.transcript).toBe("none");
   });
 });

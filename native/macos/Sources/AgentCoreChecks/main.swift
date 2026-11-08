@@ -182,6 +182,28 @@ check(WhisperManifest.files.allSatisfy { $0.url.hasPrefix("https://huggingface.c
 check(WhisperManifest.files.allSatisfy { $0.path.hasPrefix("models/") && !$0.path.contains("..") }, "Whisper files stay inside the models folder")
 check(WhisperManifest.files.reduce(0) { $0 + $1.size } < 700_000_000, "Whisper download stays under 700 MB")
 
+// MARK: Audio timeline (continuous audio for the writer)
+do {
+    var timeline = AudioTimeline()
+    let t = { (s: Double) in CMTime(seconds: s, preferredTimescale: 48_000) }
+    let first = timeline.place(arrival: t(10), count: 480, rate: 48_000)
+    check(first == t(10), "first buffer keeps its time")
+    let jittered = timeline.place(arrival: t(10.0093), count: 480, rate: 48_000) // 0.7 ms early: overlap
+    check(jittered == CMTime(value: 480, timescale: 48_000) + t(10), "jittered buffer placed right after the previous one")
+    let late = timeline.place(arrival: t(10.0215), count: 480, rate: 48_000)
+    check(late == CMTime(value: 960, timescale: 48_000) + t(10), "slightly late buffer stays continuous")
+    let gap = timeline.place(arrival: t(11), count: 480, rate: 48_000)
+    check(gap == t(11), "a real pause restarts the timeline at the arrival time")
+    check(timeline.place(arrival: t(10.5), count: 480, rate: 48_000) == nil, "a buffer from far in the past is dropped")
+    var ahead = AudioTimeline()
+    _ = ahead.place(arrival: t(0), count: 48_000, rate: 48_000)          // says 1 s of audio
+    check(ahead.place(arrival: t(0.5), count: 480, rate: 48_000) == nil, "timeline ahead of real time: drop to catch up")
+    check(ahead.place(arrival: .invalid, count: 480, rate: 48_000) == nil && ahead.place(arrival: t(2), count: 0, rate: 48_000) == nil, "invalid input dropped")
+}
+
+// MARK: Elapsed time (menu bar and REC pill)
+check(Elapsed.format(0) == "0:00" && Elapsed.format(247) == "4:07" && Elapsed.format(3729) == "1:02:09" && Elapsed.format(-5) == "0:00", "elapsed time formatting")
+
 // MARK: Share command
 let shareValidator = CommandValidator()
 if case .success(.share(let c)) = shareValidator.decode(#"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"share.mp4"}"#) { check(c.file == .shareMp4, "share decoded") } else { check(false, "share accepted") }

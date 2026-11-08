@@ -37,6 +37,9 @@
     },
     "shareCommand": {
       "$ref": "#/definitions/ShareCommand"
+    },
+    "transcriptEvent": {
+      "$ref": "#/definitions/TranscriptEvent"
     }
   },
   "definitions": {
@@ -60,6 +63,9 @@
         },
         {
           "$ref": "#/definitions/PermissionEvent"
+        },
+        {
+          "$ref": "#/definitions/TranscriptEvent"
         }
       ],
       "discriminator": {
@@ -334,6 +340,11 @@
             15,
             30
           ]
+        },
+        "liveLocale": {
+          "type": "string",
+          "pattern": "^(auto|[a-z]{2,3}(_[A-Z]{2})?)$",
+          "description": "Transcribe live while recording (Apple's on-device model, macOS 26), in this language ('auto': this Mac's). Absent: no live transcript."
         }
       }
     },
@@ -482,6 +493,45 @@
         "summary.md"
       ],
       "description": "recording.mp4 (original), share.mp4 (smaller copy with one mixed audio track), summary.md."
+    },
+    "TranscriptEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "meetingId",
+        "speaker",
+        "start",
+        "end",
+        "text"
+      ],
+      "description": "One finished line of the live transcript. The agent also writes transcript.json when the recording stops.",
+      "properties": {
+        "type": {
+          "const": "transcript"
+        },
+        "meetingId": {
+          "$ref": "#/definitions/MeetingId"
+        },
+        "speaker": {
+          "enum": [
+            "You",
+            "Others"
+          ]
+        },
+        "start": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end": {
+          "type": "number",
+          "minimum": 0
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 4000
+        }
+      }
     }
   },
   "x-protocolVersion": 1

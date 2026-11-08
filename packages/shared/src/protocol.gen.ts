@@ -16,6 +16,7 @@ export interface ProtocolRoot {
     startCommand?:    StartCommand;
     stateCommand?:    StateCommand;
     stopCommand?:     StopCommand;
+    transcriptEvent?: TranscriptEvent;
     trayEvent?:       TrayEvent;
     [property: string]: unknown;
 }
@@ -107,10 +108,15 @@ export interface ShareCommand {
 export type ShareFile = "recording.mp4" | "share.mp4" | "summary.md";
 
 export interface StartCommand {
-    cmd:       "start";
-    fps:       number;
-    height:    number;
-    meetingId: string;
+    cmd:    "start";
+    fps:    number;
+    height: number;
+    /**
+     * Transcribe live while recording (Apple's on-device model, macOS 26), in this language
+     * ('auto': this Mac's). Absent: no live transcript.
+     */
+    liveLocale?: string;
+    meetingId:   string;
     /**
      * Absolute path of recording.mp4 to create, inside the meetings folder.
      */
@@ -132,6 +138,21 @@ export interface StopCommand {
     cmd:       "stop";
     meetingId: string;
 }
+
+/**
+ * One finished line of the live transcript. The agent also writes transcript.json when the
+ * recording stops.
+ */
+export interface TranscriptEvent {
+    end:       number;
+    meetingId: string;
+    speaker:   Speaker;
+    start:     number;
+    text:      string;
+    type:      "transcript";
+}
+
+export type Speaker = "You" | "Others";
 
 export interface TrayEvent {
     action: TrayAction;

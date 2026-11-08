@@ -9,6 +9,9 @@
 // Respecting the user: if the recorder goes idle while the meeting is still on (the user pressed
 // Stop, or the start failed), auto-start is suppressed until the meeting ends, so we never restart
 // a recording the user just stopped, or retry a failing start every 3 seconds.
+//
+// Except when the recorder itself failed mid-meeting: the rest of the call must not be lost, so a
+// new recording ("… (continued)") starts right away, at most MAX_CONTINUATIONS times per meeting.
 import type { MicEvent, Settings } from "@meeting-recorder/shared";
 import type { Logger } from "../repositories/MeetingRepository.ts";
 import type { EventBus } from "./EventBus.ts";
@@ -18,6 +21,8 @@ import type { RecordingService } from "./RecordingService.ts";
 export const START_AFTER_MS = 3_000;
 export const STOP_AFTER_MS = 15_000;
 export const OWN_BUNDLE_ID = "com.meetingrecorder.agent";
+export const MAX_CONTINUATIONS = 3;
+export const CONTINUE_AFTER_MS = 1_000;
 
 export interface DetectionRule {
   label: string;
@@ -60,6 +65,7 @@ export class DetectionService {
   private matching = false;      // last mic event matched a meeting
   private suppressed = false;    // recorder went idle mid-meeting: wait for the meeting to end
   private wasActive = false;
+  private continuations = 0;     // recordings restarted after a recorder failure, this meeting
   private startTimer: NodeJS.Timeout | null = null;
   private stopTimer: NodeJS.Timeout | null = null;
   private readonly rules: CompiledRule[];
@@ -76,7 +82,11 @@ export class DetectionService {
     this.unsubscribe = opts.bus.subscribe((event) => {
       if (event.type !== "status") return;
       const active = event.status.state !== "idle";
-      if (this.wasActive && !active && this.matching) this.suppressed = true;
+      if (this.wasActive && !active && this.matching) {
+        const crashed = this.recording.crashedAutoMeeting;
+        if (crashed && this.enabled && this.continuations < MAX_CONTINUATIONS) this.continueAfterCrash(crashed);
+        else this.suppressed = true;
+      }
       this.wasActive = active;
     });
   }
@@ -107,6 +117,7 @@ export class DetectionService {
 
     this.clearStart();
     this.suppressed = false; // the meeting is over: the next one may auto-record again
+    this.continuations = 0;
     const active = this.recording.stateName === "starting" || this.recording.stateName === "recording";
     if (active && this.recording.isAutoStarted && !this.stopTimer) {
       this.stopTimer = setTimeout(() => {
@@ -117,6 +128,19 @@ export class DetectionService {
         void this.recording.dispatch({ type: "stop", reason: "meeting-ended" });
       }, STOP_AFTER_MS);
     }
+  }
+
+  private continueAfterCrash(crashed: { app: string; title: string }): void {
+    this.continuations += 1;
+    this.clearStart();
+    const suffix = " (continued)";
+    const title = crashed.title.replace(/ \(continued\)$/, "").slice(0, 120 - suffix.length) + suffix; // titles cap at 120
+    this.log.warn({ app: crashed.app, attempt: this.continuations }, "recorder failed mid-meeting; continuing in a new recording");
+    this.startTimer = setTimeout(() => {
+      this.startTimer = null;
+      if (this.recording.stateName !== "idle" || !this.matching) return;
+      void this.recording.dispatch({ type: "start", trigger: { app: crashed.app, title, source: "auto" } });
+    }, CONTINUE_AFTER_MS);
   }
 
   dispose(): void {

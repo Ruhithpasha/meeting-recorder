@@ -114,4 +114,17 @@ describe("agent events", () => {
     writeFileSync(join(dirs.meetingsDir, id, "recording.state.json"), "{}");
     await expect(c.onAgentEvent(hello())).resolves.toBeUndefined();
   });
+
+  it("live transcript lines of the meeting being recorded go to the dashboard; stray ones don't", async () => {
+    const { container: c, agent } = await makeContainer();
+    const events: unknown[] = [];
+    c.bus.subscribe((e) => events.push(e));
+    await c.recording.toggle();
+    const id = agent.starts[0]!.meetingId;
+    await c.onAgentEvent({ type: "transcript", meetingId: id, speaker: "You", start: 1, end: 2.5, text: "Hello everyone" });
+    await c.onAgentEvent({ type: "transcript", meetingId: "2020-01-01_00-00-00_old", speaker: "Others", start: 1, end: 2, text: "stray" });
+    expect(events).toContainEqual({ type: "liveTranscript", id, segment: { start: 1, end: 2.5, speaker: "You", text: "Hello everyone" } });
+    expect(JSON.stringify(events)).not.toContain("stray");
+    expect(c.live.get(id)).toHaveLength(1);
+  });
 });

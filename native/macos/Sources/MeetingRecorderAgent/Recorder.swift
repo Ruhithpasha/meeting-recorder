@@ -17,6 +17,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
     var onStarted: ((String) -> Void)?
     var onStopped: ((String, Double) -> Void)?
     var onError: ((String, AgentErrorCode, String) -> Void)?
+    /// A finished line of the live transcript (meeting id, segment).
+    var onTranscript: ((String, Transcript.Segment) -> Void)?
 
     private let queue = DispatchQueue(label: "recorder.capture", qos: .userInitiated)
     private var session: Session?
@@ -42,6 +44,8 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         var lastAppended: [CMTime] = [.invalid, .invalid, .invalid]
         var dropped = [0, 0, 0]          // timestamp not after the input's previous sample
         var formats: [CMFormatDescription?] = [nil, nil, nil]
+        var timelines = [AudioTimeline(), AudioTimeline(), AudioTimeline()] // audio inputs 1, 2
+        var live: AnyObject?             // LiveTranscriber (macOS 26), when live transcription runs
         var formatChanges = [0, 0, 0]
 
         /// One line for the log: what each track had received when the writer failed.
@@ -66,7 +70,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
     var activeMeetingId: String? { queue.sync { session?.startPTS != nil ? session?.meetingId : nil } }
     var isBusy: Bool { queue.sync { session != nil || preparing != nil } }
 
-    func start(meetingId: String, path: String, height: Int, fps: Int) {
+    func start(meetingId: String, path: String, height: Int, fps: Int, liveLocale: String? = nil) {
         let reserved: Bool = queue.sync {
             guard session == nil, preparing == nil else { return false }
             preparing = (meetingId, false)
@@ -99,16 +103,30 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
                 config.channelCount = 2
                 config.captureMicrophone = true
 
-                let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+                // Our own windows (the REC indicator, the dashboard) stay out of the recording.
+                let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+                let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
                 let stream = SCStream(filter: filter, configuration: config, delegate: self)
                 for type in [SCStreamOutputType.screen, .audio, .microphone] {
                     try stream.addStreamOutput(self, type: type, sampleHandlerQueue: queue)
                 }
                 s.stream = stream
+                // Live transcript gets ready alongside capture, so it hears the meeting from the start.
+                let live: Task<AnyObject?, Never>? = {
+                    guard let liveLocale, #available(macOS 26.0, *) else { return nil }
+                    return Task { await LiveTranscriber.start(localeId: liveLocale) }
+                }()
                 try await stream.startCapture()
+                let liveTranscriber = await live?.value
+                if #available(macOS 26.0, *), let lt = liveTranscriber as? LiveTranscriber {
+                    lt.onSegment = { [weak self] segment in report { self?.onTranscript?(meetingId, segment) } }
+                } else if liveLocale != nil {
+                    Log.info("live transcript not available now for \(meetingId); it will be transcribed after the meeting")
+                }
                 let stopRequested: Bool = queue.sync {
                     let requested = self.preparing?.stopRequested ?? false
                     self.preparing = nil
+                    s.live = liveTranscriber
                     self.session = s
                     return requested
                 }
@@ -152,7 +170,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
 
     func stream(_ stream: SCStream, didOutputSampleBuffer buffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard let s = session, !s.finishing, buffer.isValid else { return }
-        let pts = buffer.presentationTimeStamp
+        let arrival = buffer.presentationTimeStamp
         let index: Int
         switch type {
         case .screen:
@@ -165,15 +183,35 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
 
         if s.startPTS == nil {
             guard index == 0 else { return }
-            let age = CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), pts).seconds
+            let age = CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), arrival).seconds
             guard age < CaptureMath.maxFirstFrameAgeSeconds else { return } // stale cached frame
             guard s.writer.startWriting() else { return finish(s, error: .writer(RecorderError.describe(s.writer.error))) }
-            s.writer.startSession(atSourceTime: pts)
-            s.startPTS = pts
+            s.writer.startSession(atSourceTime: arrival)
+            s.startPTS = arrival
             let id = s.meetingId
             report { self.onStarted?(id) }
         }
-        guard let start = s.startPTS, pts >= start else { return }
+        guard let start = s.startPTS, arrival >= start else { return }
+        // Audio: placed on a continuous timeline (AudioTimeline) before the writer sees it.
+        var sample = buffer
+        var time = arrival
+        if index != 0 {
+            guard let asbd = buffer.formatDescription.flatMap({ CMAudioFormatDescriptionGetStreamBasicDescription($0)?.pointee }),
+                  let placed = s.timelines[index].place(arrival: arrival, count: CMSampleBufferGetNumSamples(buffer), rate: asbd.mSampleRate),
+                  CMTimeCompare(placed, start) >= 0 else { s.dropped[index] += 1; return }
+            if placed != arrival {
+                var timing = CMSampleTimingInfo(duration: CMTime(value: 1, timescale: CMTimeScale(asbd.mSampleRate.rounded())), presentationTimeStamp: placed, decodeTimeStamp: .invalid)
+                var copy: CMSampleBuffer?
+                guard CMSampleBufferCreateCopyWithNewTiming(allocator: nil, sampleBuffer: buffer, sampleTimingEntryCount: 1, sampleTimingArray: &timing, sampleBufferOut: &copy) == noErr,
+                      let copy else { s.dropped[index] += 1; return }
+                sample = copy
+            }
+            time = placed
+            if #available(macOS 26.0, *), let live = s.live as? LiveTranscriber {
+                live.feed(sample, track: index - 1, seconds: CMTimeSubtract(time, start).seconds) // 0: Others, 1: You
+            }
+        }
+        let pts = time
         // A sample that doesn't move its track forward is dropped rather than handed to the
         // writer. Checked before the frame pacer, so a duplicate frame doesn't use up a slot.
         if s.lastAppended[index].isValid, CMTimeCompare(pts, s.lastAppended[index]) <= 0 {
@@ -194,7 +232,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         }
 
         let input = s.inputs[index]
-        if input.isReadyForMoreMediaData, input.append(buffer) {
+        if input.isReadyForMoreMediaData, input.append(sample) {
             s.appended[index] += 1
             s.lastAppended[index] = pts
             if index == 0 || CMTimeCompare(pts, s.lastPTS) > 0 { s.lastPTS = pts }
@@ -234,6 +272,22 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
                     s.inputs.forEach { $0.markAsFinished() }
                     s.writer.finishWriting { done.resume(returning: s.writer.status == .completed) }
                 }
+            }
+            // Then the live transcript (the video is safe first), at most 10 s, before "stopped" is
+            // reported so the daemon finds transcript.json. Too slow: skipped, transcribed after.
+            if #available(macOS 26.0, *), let live = s.live as? LiveTranscriber, s.startPTS != nil {
+                let lines: Int?? = await withTaskGroup(of: Int??.self) { group in
+                    group.addTask { .some(await live.finish(writingTo: s.writer.outputURL.deletingLastPathComponent(), durationSec: max(0, duration))) }
+                    group.addTask {
+                        try? await Task.sleep(for: .seconds(10))
+                        if !Task.isCancelled { live.markFailed() } // too slow: never write over the after-meeting transcript
+                        return .none
+                    }
+                    let first = await group.next() ?? .none
+                    group.cancelAll()
+                    return first
+                }
+                Log.info("live transcript for \(id): " + (lines.flatMap { $0 }.map { "\($0) lines saved" } ?? "not saved (incomplete or too slow)"))
             }
             // Stopped before the first frame: nothing was recorded. Not an error: remove the empty
             // file and report a 0 s stop (the daemon then removes the empty meeting).

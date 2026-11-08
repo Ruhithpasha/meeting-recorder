@@ -86,7 +86,7 @@ export function SummaryPanel({ meeting }: { meeting: Meeting }) {
   } else {
     body = (
       <div className="flex flex-wrap items-center gap-2.5 text-sm text-muted-foreground">
-        <p>{meeting.summaryError ?? "A summary is written on this Mac when it's idle and plugged in."}</p>
+        <p>{meeting.summaryError ?? "A summary is written on this Mac after the meeting."}</p>
         <Button variant="outline" size="sm" disabled={busy} onClick={request}><Sparkles />{busy ? "Queuing…" : "Summarize now"}</Button>
         {error && <span className="text-destructive" role="alert">{error}</span>}
       </div>

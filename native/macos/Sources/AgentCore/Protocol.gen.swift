@@ -28,6 +28,7 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
     public let startCommand: StartCommand?
     public let stateCommand: StateCommand?
     public let stopCommand: StopCommand?
+    public let transcriptEvent: TranscriptEvent?
     public let trayEvent: TrayEvent?
 
     public enum CodingKeys: String, CodingKey {
@@ -41,10 +42,11 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
         case startCommand = "startCommand"
         case stateCommand = "stateCommand"
         case stopCommand = "stopCommand"
+        case transcriptEvent = "transcriptEvent"
         case trayEvent = "trayEvent"
     }
 
-    public init(helloEvent: HelloEvent?, micEvent: MicEvent?, openUrlCommand: OpenUrlCommand?, permissionEvent: PermissionEvent?, powerEvent: PowerEvent?, recordingEvent: RecordingEvent?, shareCommand: ShareCommand?, startCommand: StartCommand?, stateCommand: StateCommand?, stopCommand: StopCommand?, trayEvent: TrayEvent?) {
+    public init(helloEvent: HelloEvent?, micEvent: MicEvent?, openUrlCommand: OpenUrlCommand?, permissionEvent: PermissionEvent?, powerEvent: PowerEvent?, recordingEvent: RecordingEvent?, shareCommand: ShareCommand?, startCommand: StartCommand?, stateCommand: StateCommand?, stopCommand: StopCommand?, transcriptEvent: TranscriptEvent?, trayEvent: TrayEvent?) {
         self.helloEvent = helloEvent
         self.micEvent = micEvent
         self.openUrlCommand = openUrlCommand
@@ -55,6 +57,7 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
         self.startCommand = startCommand
         self.stateCommand = stateCommand
         self.stopCommand = stopCommand
+        self.transcriptEvent = transcriptEvent
         self.trayEvent = trayEvent
     }
 }
@@ -88,6 +91,7 @@ public extension ProtocolRoot {
         startCommand: StartCommand?? = nil,
         stateCommand: StateCommand?? = nil,
         stopCommand: StopCommand?? = nil,
+        transcriptEvent: TranscriptEvent?? = nil,
         trayEvent: TrayEvent?? = nil
     ) -> ProtocolRoot {
         return ProtocolRoot(
@@ -101,6 +105,7 @@ public extension ProtocolRoot {
             startCommand: startCommand ?? self.startCommand,
             stateCommand: stateCommand ?? self.stateCommand,
             stopCommand: stopCommand ?? self.stopCommand,
+            transcriptEvent: transcriptEvent ?? self.transcriptEvent,
             trayEvent: trayEvent ?? self.trayEvent
         )
     }
@@ -826,6 +831,9 @@ public struct StartCommand: Codable, Equatable, Sendable {
     public let cmd: StartCommandCmd
     public let fps: Int
     public let height: Int
+    /// Transcribe live while recording (Apple's on-device model, macOS 26), in this language
+    /// ('auto': this Mac's). Absent: no live transcript.
+    public let liveLocale: String?
     public let meetingId: String
     /// Absolute path of recording.mp4 to create, inside the meetings folder.
     public let path: String
@@ -834,14 +842,16 @@ public struct StartCommand: Codable, Equatable, Sendable {
         case cmd = "cmd"
         case fps = "fps"
         case height = "height"
+        case liveLocale = "liveLocale"
         case meetingId = "meetingId"
         case path = "path"
     }
 
-    public init(cmd: StartCommandCmd, fps: Int, height: Int, meetingId: String, path: String) {
+    public init(cmd: StartCommandCmd, fps: Int, height: Int, liveLocale: String?, meetingId: String, path: String) {
         self.cmd = cmd
         self.fps = fps
         self.height = height
+        self.liveLocale = liveLocale
         self.meetingId = meetingId
         self.path = path
     }
@@ -869,6 +879,7 @@ public extension StartCommand {
         cmd: StartCommandCmd? = nil,
         fps: Int? = nil,
         height: Int? = nil,
+        liveLocale: String?? = nil,
         meetingId: String? = nil,
         path: String? = nil
     ) -> StartCommand {
@@ -876,6 +887,7 @@ public extension StartCommand {
             cmd: cmd ?? self.cmd,
             fps: fps ?? self.fps,
             height: height ?? self.height,
+            liveLocale: liveLocale ?? self.liveLocale,
             meetingId: meetingId ?? self.meetingId,
             path: path ?? self.path
         )
@@ -1032,6 +1044,96 @@ public extension StopCommand {
 
 public enum StopCommandCmd: String, Codable, Equatable, Sendable {
     case stop = "stop"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// One finished line of the live transcript. The agent also writes transcript.json when the
+/// recording stops.
+// MARK: - TranscriptEvent
+public struct TranscriptEvent: Codable, Equatable, Sendable {
+    public let end: Double
+    public let meetingId: String
+    public let speaker: Speaker
+    public let start: Double
+    public let text: String
+    public let type: TranscriptEventType
+
+    public enum CodingKeys: String, CodingKey {
+        case end = "end"
+        case meetingId = "meetingId"
+        case speaker = "speaker"
+        case start = "start"
+        case text = "text"
+        case type = "type"
+    }
+
+    public init(end: Double, meetingId: String, speaker: Speaker, start: Double, text: String, type: TranscriptEventType) {
+        self.end = end
+        self.meetingId = meetingId
+        self.speaker = speaker
+        self.start = start
+        self.text = text
+        self.type = type
+    }
+}
+
+// MARK: TranscriptEvent convenience initializers and mutators
+
+public extension TranscriptEvent {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(TranscriptEvent.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        end: Double? = nil,
+        meetingId: String? = nil,
+        speaker: Speaker? = nil,
+        start: Double? = nil,
+        text: String? = nil,
+        type: TranscriptEventType? = nil
+    ) -> TranscriptEvent {
+        return TranscriptEvent(
+            end: end ?? self.end,
+            meetingId: meetingId ?? self.meetingId,
+            speaker: speaker ?? self.speaker,
+            start: start ?? self.start,
+            text: text ?? self.text,
+            type: type ?? self.type
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+public enum Speaker: String, Codable, Equatable, Sendable {
+    case others = "Others"
+    case you = "You"
+}
+
+public enum TranscriptEventType: String, Codable, Equatable, Sendable {
+    case transcript = "transcript"
 }
 
 //

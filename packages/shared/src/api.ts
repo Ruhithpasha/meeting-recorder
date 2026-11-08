@@ -107,4 +107,6 @@ export type ServerEvent =
   | { type: "meetingDeleted"; id: string }
   /** Progress of a share copy (POST /api/meetings/:id/share with what "video"). */
   | ({ type: "model"; engine: ModelEngine } & ModelState)
+  /** One finished line of the live transcript of the meeting being recorded. */
+  | { type: "liveTranscript"; id: string; segment: Transcript["segments"][number] }
   | { type: "share"; id: string; state: "exporting" | "ready" | "failed"; percent?: number; error?: string };

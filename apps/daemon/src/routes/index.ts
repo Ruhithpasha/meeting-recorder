@@ -48,6 +48,7 @@ export async function registerRoutes(app: FastifyInstance, c: Container, token: 
   app.post("/api/meetings/:id/stop", { schema: { params: idParams } }, meetings.stop);
   app.get("/api/meetings/:id/transcript", { schema: { params: idParams } }, meetings.transcript);
   app.post("/api/meetings/:id/transcribe", { schema: { params: idParams } }, meetings.transcribe);
+  app.get("/api/meetings/:id/live", { schema: { params: idParams } }, meetings.live);
   app.post("/api/meetings/:id/reveal", { schema: { params: idParams } }, meetings.reveal);
   app.post("/api/meetings/:id/share", {
     schema: { params: idParams, body: { type: "object", additionalProperties: false, required: ["what"], properties: { what: { enum: ["video", "original", "summary"] } } } },

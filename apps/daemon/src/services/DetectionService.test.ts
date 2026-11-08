@@ -1,7 +1,7 @@
 import type { MicEvent } from "@meeting-recorder/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeContainer } from "../../test/helpers/harness.ts";
-import { compileRules, matchMeeting, OWN_BUNDLE_ID, START_AFTER_MS, STOP_AFTER_MS, type DetectionRule } from "./DetectionService.ts";
+import { compileRules, matchMeeting, OWN_BUNDLE_ID, START_AFTER_MS, STOP_AFTER_MS, type DetectionRule, CONTINUE_AFTER_MS, MAX_CONTINUATIONS } from "./DetectionService.ts";
 import rulesFile from "./detection-rules.json" with { type: "json" };
 
 const rules = compileRules(rulesFile.rules as DetectionRule[]);
@@ -96,6 +96,43 @@ describe("DetectionService hysteresis", () => {
     await vi.advanceTimersByTimeAsync(1);
     await c.recording.settled();
     expect(agent.last("stop")).toBeDefined();
+  });
+
+  it("the recorder failing mid-meeting continues in a new recording (not suppressed like a user stop)", async () => {
+    const { container: c, agent } = await autoRecording();
+    const first = agent.starts[0]!.meetingId;
+    await c.recording.dispatch({ type: "agentError", meetingId: first, code: "writer", message: "-16341" });
+    expect(c.recording.stateName).toBe("idle");
+    await vi.advanceTimersByTimeAsync(CONTINUE_AFTER_MS);
+    await c.recording.settled();
+    expect(agent.starts).toHaveLength(2);
+    expect(c.repo.get(agent.starts[1]!.meetingId)?.title).toMatch(/ \(continued\)$/);
+    expect(c.recording.isAutoStarted).toBe(true);
+  });
+
+  it(`continues at most ${MAX_CONTINUATIONS} times per meeting, without stacking "(continued)"`, async () => {
+    const { container: c, agent } = await autoRecording();
+    const titles: string[] = [];
+    for (let i = 0; i < MAX_CONTINUATIONS + 1; i++) {
+      const id = agent.starts.at(-1)!.meetingId;
+      titles.push(c.repo.get(id)!.title);
+      await c.recording.dispatch({ type: "agentStarted", meetingId: id });
+      await c.recording.dispatch({ type: "agentError", meetingId: id, code: "writer", message: "x" });
+      await vi.advanceTimersByTimeAsync(CONTINUE_AFTER_MS);
+      await c.recording.settled();
+    }
+    expect(agent.starts).toHaveLength(1 + MAX_CONTINUATIONS);
+    expect(titles.at(-1)!.match(/continued/g)).toHaveLength(1);
+  });
+
+  it("a recording the user stopped is not restarted (only failures continue)", async () => {
+    const { container: c, agent } = await autoRecording();
+    await c.recording.toggle(); // user stops
+    await c.recording.dispatch({ type: "agentStopped", meetingId: agent.starts[0]!.meetingId, durationSec: 5 });
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS * 3);
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS * 3);
+    expect(agent.starts).toHaveLength(1);
   });
 
   it("a brief mute (match returns) cancels the stop", async () => {

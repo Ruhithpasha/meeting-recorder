@@ -137,7 +137,7 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
       <Card>
         <CardHeader>
           <CardTitle className="font-heading text-base">Transcripts and summaries</CardTitle>
-          <CardDescription>Made on this Mac when it's idle and plugged in. Nothing is sent anywhere.</CardDescription>
+          <CardDescription>Made on this Mac, live during the meeting where possible. Nothing is sent anywhere.</CardDescription>
         </CardHeader>
         <CardContent className="grid gap-5">
           <div className="flex items-center justify-between gap-4">
@@ -172,7 +172,7 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
             {settings.transcription.summaryEngine === "qwen" && <ModelDownload engine="qwen" state={modelState("qwen")} onDownload={() => download("qwen")} onCancel={() => cancelDownload("qwen")}
                 cancelling={cancelling.qwen?.busy} cancelError={cancelling.qwen?.error} />}
             <p className="text-xs text-muted-foreground">
-              Open models download once from Hugging Face, then run only on this Mac, at low priority, when it's idle and plugged in.
+              Open models download once from Hugging Face, then run only on this Mac, at low priority, when you're not recording.
             </p>
           </div>
           <div className="grid gap-2">

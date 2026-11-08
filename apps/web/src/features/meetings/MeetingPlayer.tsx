@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { Meeting, ServerEvent, ShareWhat } from "@meeting-recorder/shared";
+import type { Meeting, ServerEvent, ShareWhat, Transcript } from "@meeting-recorder/shared";
 import { ChevronDown, FileText, Film, FolderOpen, Share, Trash2, Video } from "lucide-react";
 import { cn } from "cn";
 import { api } from "@/api/client.ts";
@@ -11,13 +11,16 @@ import { Progress } from "@/components/ui/progress";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { LiveTranscript } from "./LiveTranscript.tsx";
 import { SummaryPanel } from "./SummaryPanel.tsx";
 import { TranscriptPanel } from "./TranscriptPanel.tsx";
 
 export type ShareProgress = Extract<ServerEvent, { type: "share" }>;
 
 /** Plays a meeting (streamed with Range requests, so seeking works), shares it, deletes it to the Trash. */
-export function MeetingPlayer({ meeting, share, onDeleted }: { meeting: Meeting | null; share?: ShareProgress; onDeleted: (id: string) => void }) {
+export function MeetingPlayer({ meeting, share, liveLines, onDeleted }: {
+  meeting: Meeting | null; share?: ShareProgress; liveLines?: Transcript["segments"]; onDeleted: (id: string) => void;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +134,9 @@ export function MeetingPlayer({ meeting, share, onDeleted }: { meeting: Meeting 
       )}
       {(error ?? (share?.state === "failed" && share !== dismissed ? share.error : null)) && (
         <p className="mt-2 text-sm text-destructive" role="alert">{error ?? share?.error}</p>
+      )}
+      {(recording || (meeting.transcript !== "done" && (liveLines?.length ?? 0) > 0)) && (
+        <LiveTranscript meetingId={meeting.id} recording={recording} segments={liveLines ?? []} />
       )}
       <SummaryPanel meeting={meeting} />
       <TranscriptPanel meeting={meeting} onSeek={(s) => {

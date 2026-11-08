@@ -45,7 +45,7 @@ public struct CommandValidator: Sendable {
     }
 
     private static let allowedKeys: [String: Set<String>] = [
-        "start": ["cmd", "meetingId", "path", "height", "fps"],
+        "start": ["cmd", "meetingId", "path", "height", "fps", "liveLocale"],
         "stop": ["cmd", "meetingId"],
         "state": ["cmd", "status", "label"],
         "openUrl": ["cmd", "url"],
@@ -87,6 +87,7 @@ public struct CommandValidator: Sendable {
             guard Self.isMeetingId(c.meetingId) else { return "invalid meetingId" }
             guard [720, 1080].contains(c.height) else { return "invalid height" }
             guard [10, 15, 30].contains(c.fps) else { return "invalid fps" }
+            if let locale = c.liveLocale, locale.range(of: #"^(auto|[a-z]{2,3}(_[A-Z]{2})?)$"#, options: .regularExpression) == nil { return "invalid liveLocale" }
             guard c.path.hasPrefix("/"), c.path.hasSuffix("/recording.mp4"), !c.path.contains("/../") else { return "invalid path" }
             if let dir = meetingsDir {
                 let expected = (dir as NSString).appendingPathComponent("\(c.meetingId)/recording.mp4")
@@ -139,6 +140,9 @@ public enum EventEncoder {
         line(RecordingEvent(durationSec: durationSec, error: error, meetingId: meetingId, state: state, type: .recording))
     }
 
+    public static func transcript(meetingId: String, speaker: Speaker, start: Double, end: Double, text: String) -> String {
+        line(TranscriptEvent(end: end, meetingId: meetingId, speaker: speaker, start: start, text: String(text.prefix(4000)), type: .transcript))
+    }
     public static func tray(_ action: TrayAction) -> String { line(TrayEvent(action: action, type: .tray)) }
     public static func power(_ state: PowerState) -> String { line(PowerEvent(state: state, type: .power)) }
     public static func permission(_ state: PermissionState) -> String { line(PermissionEvent(screen: state, type: .permission)) }

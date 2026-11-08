@@ -15,6 +15,7 @@ import { RecordingService } from "./services/RecordingService.ts";
 import { RecoveryService } from "./services/RecoveryService.ts";
 import { SettingsService } from "./services/SettingsService.ts";
 import { StatusService } from "./services/StatusService.ts";
+import { LiveTranscriptService } from "./services/LiveTranscriptService.ts";
 import { ModelService } from "./services/ModelService.ts";
 import { ShareService } from "./services/ShareService.ts";
 import { TranscriptionService, type Spawner } from "./services/TranscriptionService.ts";
@@ -109,14 +110,15 @@ export async function createContainer(o: ContainerOptions) {
         });
       })
     : Promise.resolve(noCapabilities));
+  const live = new LiveTranscriptService(bus);
   const onAgentEvent = createAgentEventHandler({
-    agent: o.agent, recording, detection, recovery, status, bus, log: o.log,
+    agent: o.agent, recording, detection, recovery, status, bus, live, log: o.log,
     dashboardUrl: o.dashboardUrl, openFolder: o.openFolder,
     onPower: (state) => transcription.setPower(state),
   });
 
   return {
-    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, share, models, onAgentEvent,
+    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, share, models, live, onAgentEvent,
     reveal: o.reveal ?? (() => {}),
     capabilities: getCapabilities,
     start() {
@@ -130,6 +132,7 @@ export async function createContainer(o: ContainerOptions) {
       transcription.dispose();
       share.dispose();
       models.dispose();
+      live.dispose();
     },
   };
 }

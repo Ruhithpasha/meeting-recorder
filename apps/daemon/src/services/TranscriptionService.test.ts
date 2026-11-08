@@ -47,7 +47,7 @@ async function setup(opts: { transcriber?: string | null } = {}) {
 }
 
 describe("TranscriptionService", () => {
-  it("waits for AC power, then transcribes newest first and marks done", async () => {
+  it("waits for the first power report, then transcribes newest first and marks done", async () => {
     const { tx, children, add, container: c, settle } = await setup();
     await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto", engine: "apple", summaryEngine: "apple" } }); // transcripts only
     const older = await add(1);
@@ -64,12 +64,10 @@ describe("TranscriptionService", () => {
     expect(children[1]!.args[0]).toContain(older);
   });
 
-  it("does nothing on battery, when disabled, or while recording", async () => {
+  it("does nothing when disabled or while recording", async () => {
     const { tx, children, add, container: c } = await setup();
-    await add(1);
-    tx.setPower("battery");
-    expect(children).toHaveLength(0);
     await c.settings.update({ ...c.settings.get(), transcription: { enabled: false, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" } });
+    await add(1);
     tx.setPower("ac");
     expect(children).toHaveLength(0);
     await c.recording.toggle(); // recording starts
@@ -90,12 +88,14 @@ describe("TranscriptionService", () => {
     await vi.waitFor(() => expect(children).toHaveLength(2));
   });
 
-  it("unplugging cancels the running job", async () => {
+  it("runs on battery too, and unplugging doesn't stop a job", async () => {
     const { tx, children, add } = await setup();
     await add(1);
+    tx.setPower("battery");
+    await vi.waitFor(() => expect(children).toHaveLength(1));
     tx.setPower("ac");
-    tx.setPower("battery"); // cancelled while the job is still getting ready
-    await vi.waitFor(() => expect(children[0]?.killed).toBe("SIGTERM"));
+    tx.setPower("battery");
+    expect(children[0]!.killed).toBeNull();
   });
 
   it(`retries a failing meeting, then marks it failed after ${MAX_ATTEMPTS} attempts; manual retry resets`, async () => {

@@ -1,6 +1,6 @@
 import { Settings as SettingsIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import type { ModelEngine, ModelState, ServerEvent, Status } from "@meeting-recorder/shared";
+import type { ModelEngine, ModelState, ServerEvent, Status, Transcript } from "@meeting-recorder/shared";
 import { establishSession, type SessionResult } from "@/api/session.ts";
 import { EmptyState, Spinner } from "@/components/ui.tsx";
 import { BrandMark } from "@/components/Waveform.tsx";
@@ -40,6 +40,7 @@ function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [shares, setShares] = useState<Record<string, ShareProgress>>({});
+  const [liveLines, setLiveLines] = useState<Record<string, Transcript["segments"]>>({});
   const [liveModels, setLiveModels] = useState<Partial<Record<ModelEngine, ModelState>>>({});
   const meetings = useMeetings();
   const { applyEvent } = meetings;
@@ -47,11 +48,17 @@ function Dashboard() {
   const onEvent = useCallback((event: ServerEvent) => {
     if (event.type === "status") setStatus(event.status);
     else if (event.type === "share") setShares((s) => ({ ...s, [event.id]: event }));
+    else if (event.type === "liveTranscript") setLiveLines((l) => ({ ...l, [event.id]: [...(l[event.id] ?? []), event.segment] }));
     else if (event.type === "model") {
       const { type: _type, engine, ...state } = event;
       setLiveModels((m) => ({ ...m, [engine]: state }));
     }
-    else applyEvent(event);
+    else {
+      // The real transcript (or deletion) replaces the live lines: drop them so they can't pile up.
+      const done = event.type === "meetingDeleted" ? event.id : event.type === "meeting" && event.meeting.transcript === "done" ? event.meeting.id : null;
+      if (done) setLiveLines((l) => { if (!(done in l)) return l; const { [done]: _gone, ...rest } = l; return rest; });
+      applyEvent(event);
+    }
   }, [applyEvent]);
   const connection = useServerEvents(onEvent);
 
@@ -120,6 +127,7 @@ function Dashboard() {
           ) : (
             // key: fresh state per meeting, so a pending delete confirmation can't carry over
             <MeetingPlayer key={selected?.id ?? "none"} meeting={selected} share={selected ? shares[selected.id] : undefined}
+              liveLines={selected ? liveLines[selected.id] : undefined}
               onDeleted={() => setSelectedId(null)} />
           )}
         </div>

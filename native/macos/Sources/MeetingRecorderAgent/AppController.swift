@@ -13,6 +13,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let permissions = Permissions()
     private let power = PowerMonitor()
     private let dashboard = DashboardWindow()
+    private let indicator = RecordingIndicator()
     private var meetingsDir = ""
     /// launchd starts us with --background at login: stay in the menu bar. Opened by the user
     /// (Finder, Spotlight, Launchpad, `meeting-recorder open`): show the dashboard window.
@@ -81,12 +82,23 @@ final class AppController: NSObject, NSApplicationDelegate {
         host.onCommand = { [weak self] in self?.handle($0) }
         host.onFatal = { [weak self] in self?.menu.showError($0) }
 
+        indicator.onClick = { [weak self] in self?.send(EventEncoder.tray(.openDashboard)) }
+        recorder.onTranscript = { [weak self] id, s in
+            self?.send(EventEncoder.transcript(meetingId: id, speaker: s.speaker == "You" ? .you : .others, start: s.start, end: s.end, text: s.text))
+        }
         recorder.onStarted = { [weak self] id in
+            let now = Date()
+            self?.menu.recordingSince = now
+            self?.indicator.show(since: now)
             self?.send(EventEncoder.recording(.started, meetingId: id))
             Self.notify(title: "Recording started", body: "Meeting Recorder is recording your screen and audio.")
         }
-        recorder.onStopped = { [weak self] id, duration in self?.send(EventEncoder.recording(.stopped, meetingId: id, durationSec: duration)) }
+        recorder.onStopped = { [weak self] id, duration in
+            self?.indicator.hide()
+            self?.send(EventEncoder.recording(.stopped, meetingId: id, durationSec: duration))
+        }
         recorder.onError = { [weak self] id, code, message in
+            self?.indicator.hide()
             self?.send(EventEncoder.recording(.error, meetingId: id, error: AgentError(code: code, message: message)))
         }
         mic.onChange = { [weak self] snapshot in self?.send(EventEncoder.mic(users: snapshot.users, windows: snapshot.windows)) }
@@ -135,7 +147,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     private func handle(_ command: DaemonCommand) {
         switch command {
-        case .start(let c): recorder.start(meetingId: c.meetingId, path: c.path, height: c.height, fps: c.fps)
+        case .start(let c): recorder.start(meetingId: c.meetingId, path: c.path, height: c.height, fps: c.fps, liveLocale: c.liveLocale)
         case .stop(let c): recorder.stop(meetingId: c.meetingId)
         case .state(let c):
             menu.render(status: c.status, label: c.label)

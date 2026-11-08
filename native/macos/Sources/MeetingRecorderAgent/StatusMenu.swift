@@ -9,7 +9,10 @@ final class StatusMenu: NSObject {
     var onOpenPermissions: (() -> Void)?
     var onQuit: (() -> Void)?
 
-    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    /// When the current recording started (set by the app when capture starts, so the menu-bar
+    /// timer and the REC pill count from the same moment).
+    var recordingSince: Date?
     private let stateLine = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
     private let toggle = NSMenuItem(title: "Start Recording", action: #selector(toggleClicked), keyEquivalent: "r")
     private let permissions = NSMenuItem(title: "Allow Screen Recording…", action: #selector(permissionsClicked), keyEquivalent: "")
@@ -57,13 +60,16 @@ final class StatusMenu: NSObject {
         case .idle:
             item.button?.image = Self.waveform(Self.restingLevels, color: nil)
         case .recording:
-            // A gently moving waveform: the live signal. ~6 fps, a few CPU microseconds per frame.
+            // A gently moving waveform (the live signal, ~6 fps) and the elapsed time next to it.
             frame = 0
+            if recordingSince == nil { recordingSince = Date() } // e.g. adopted after a daemon restart
             item.button?.image = Self.waveform(Self.liveFrames[0], color: .systemRed)
+            updateElapsed()
             animation = Timer.scheduledTimer(withTimeInterval: 0.16, repeats: true) { [weak self] _ in
                 guard let self else { return }
                 self.frame = (self.frame + 1) % Self.liveFrames.count
                 self.item.button?.image = Self.waveform(Self.liveFrames[self.frame], color: .systemRed)
+                if self.frame == 0 { self.updateElapsed() } // ~once a second
             }
         case .starting, .stopping:
             item.button?.image = Self.waveform(Self.restingLevels, color: .systemRed)
@@ -73,6 +79,11 @@ final class StatusMenu: NSObject {
             image?.isTemplate = false
             item.button?.image = image
         }
+        if status != .recording {
+            recordingSince = nil
+            item.button?.title = ""
+        }
+        item.button?.imagePosition = .imageLeading
         item.button?.image?.accessibilityDescription = text
         item.button?.toolTip = "Meeting Recorder: \(text)"
         stateLine.title = text
@@ -105,6 +116,14 @@ final class StatusMenu: NSObject {
         }
         image.isTemplate = color == nil
         return image
+    }
+
+    private func updateElapsed() {
+        guard let since = recordingSince else { return }
+        let text = " " + Elapsed.format(Int(Date().timeIntervalSince(since)))
+        item.button?.attributedTitle = NSAttributedString(string: text, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold), .foregroundColor: NSColor.systemRed,
+        ])
     }
 
     func setPermissionMissing(_ missing: Bool) {

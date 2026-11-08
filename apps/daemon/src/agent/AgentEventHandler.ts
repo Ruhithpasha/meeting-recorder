@@ -4,6 +4,7 @@ import type { Logger } from "../repositories/MeetingRepository.ts";
 import type { DetectionService } from "../services/DetectionService.ts";
 import type { EventBus } from "../services/EventBus.ts";
 import type { RecordingService } from "../services/RecordingService.ts";
+import type { LiveTranscriptService } from "../services/LiveTranscriptService.ts";
 import type { RecoveryService } from "../services/RecoveryService.ts";
 import type { StatusService } from "../services/StatusService.ts";
 import type { AgentPort } from "./AgentChannel.ts";
@@ -15,6 +16,7 @@ export interface AgentEventDeps {
   recovery: RecoveryService;
   status: StatusService;
   bus: EventBus;
+  live: LiveTranscriptService;
   log: Logger;
   dashboardUrl: () => string;
   openFolder: () => void;
@@ -42,6 +44,11 @@ export function createAgentEventHandler(d: AgentEventDeps) {
       }
       case "mic":
         d.detection.onMic(event);
+        return;
+      case "transcript":
+        // Only for the meeting being recorded (or still saving): a stray line can't land elsewhere.
+        if (!d.recording.busyMeetingIds.has(event.meetingId)) return;
+        d.live.add(event.meetingId, { start: event.start, end: event.end, speaker: event.speaker, text: event.text });
         return;
       case "recording":
         if (event.state === "started") return d.recording.dispatch({ type: "agentStarted", meetingId: event.meetingId });

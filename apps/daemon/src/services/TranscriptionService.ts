@@ -3,7 +3,7 @@
 //   2. summarize  (Foundation Models)  ─▶ summary.json/.md     meeting.summary (after 1)
 //
 //   pending: meeting id ─▶ next job kind (built once at boot, kept in sync from meeting events)
-//   pump() ──▶ gates: recorder idle · on AC power · nothing running · kind allowed and available
+//   pump() ──▶ gates: recorder idle · power known (battery is fine) · nothing running · kind allowed and available
 //      └─▶ newest pending meeting ─▶ spawn MeetingRecorderTranscriber [--summarize] (watchdog)
 //
 //   transcriber exit code ─▶ outcome
@@ -16,7 +16,7 @@
 //
 // Automatic jobs follow the settings; jobs the user asks for ("Transcribe/Summarize now",
 // Retry) run even when the automatic setting is off. Cancelled (requeued) when a recording
-// starts, the Mac is unplugged or the meeting is deleted. "running" left by a crash is reset
+// starts or the meeting is deleted. "running" left by a crash is reset
 // at boot, so nothing is lost. No audio or text ever leaves the Mac.
 import { spawn, type ChildProcess } from "node:child_process";
 import { stat } from "node:fs/promises";
@@ -164,10 +164,11 @@ export class TranscriptionService {
 
   get unavailable(): string | null { return this.unavailableFor("transcript"); }
 
+  /** Jobs run on battery too: they're at background priority (efficiency cores), and waiting for
+   *  a charger made transcripts arrive hours late. The first power report just opens the gate. */
   setPower(state: "ac" | "battery"): void {
     this.power = state;
-    if (state === "battery") this.cancelRunning();
-    else this.pump();
+    this.pump();
   }
 
   /** Settings changed: stop a job its setting turned off; re-check unavailable kinds (the user
@@ -206,7 +207,7 @@ export class TranscriptionService {
 
   /** Starts the next job if every gate is open. No disk scans. Safe to call at any time. */
   pump(): void {
-    if (this.running || this.power !== "ac" || this.d.recording.stateName !== "idle") return;
+    if (this.running || this.power === "unknown" || this.d.recording.stateName !== "idle") return;
     const t = this.d.settings().transcription;
     const engine = (kind: JobKind) => (kind === "transcript" ? t.engine : t.summaryEngine);
     const waitingForModel = (kind: JobKind) => { const e = engine(kind); return e !== "apple" && !!this.d.modelBusy?.(e); };

@@ -20,6 +20,8 @@
 // Events are processed one at a time (serial promise queue), so async side effects (files, agent
 // commands) of one transition never interleave with another. Events that don't apply to the
 // current state, or carry another meeting's id, are logged and ignored.
+import { stat } from "node:fs/promises";
+import { join } from "node:path";
 import type { AgentErrorCode, Meeting, Settings, StartCommand } from "@meeting-recorder/shared";
 import type { AgentPort } from "../agent/AgentChannel.ts";
 import { meetingId, newMeeting } from "../models/meeting.ts";
@@ -71,6 +73,9 @@ export interface RecordingDeps {
 
 export class RecordingService {
   private state: State = { name: "idle" };
+  /** Set when an auto-started recording just died because the recorder failed (not a user stop):
+   *  detection uses it to continue the meeting in a new recording. Cleared by the next start. */
+  private crashed: Meeting | null = null;
   private timer: NodeJS.Timeout | null = null;
   /** Meetings whose stop timed out: the agent may still be finishing them. */
   private readonly detached = new Set<string>();
@@ -83,6 +88,9 @@ export class RecordingService {
 
   get stateName(): State["name"] { return this.state.name; }
   get currentMeetingId(): string | null { return this.state.name === "idle" ? null : this.state.meeting.id; }
+  /** The auto-started meeting whose recording just failed, if that's why we're idle. */
+  get crashedAutoMeeting(): Meeting | null { return this.state.name === "idle" ? this.crashed : null; }
+
   /** True when the current recording was started by detection (so detection may also stop it). */
   get isAutoStarted(): boolean { return this.state.name !== "idle" && this.state.auto; }
   /** Meetings that must not be recovered or deleted: the current one and any detached ones. */
@@ -145,7 +153,10 @@ export class RecordingService {
         if (!this.isFor(event, s.meeting.id)) break;
         if (event.type === "stop" && s.name === "recording") return this.requestStop();
         if (event.type === "agentStopped") return this.finish(s.meeting, event.durationSec);
-        if (event.type === "agentError") return this.recoverAndIdle(s.meeting, event.message);
+        if (event.type === "agentError") {
+          if (s.name === "recording" && s.auto) this.crashed = s.meeting;
+          return this.recoverAndIdle(s.meeting, event.message);
+        }
         if (event.type === "stopTimeout" && s.name === "stopping") {
           this.detached.add(s.meeting.id);
           this.d.status.setWarning("recording", "The recorder is taking long to save the last recording. It will be finished when it's done.");
@@ -178,7 +189,13 @@ export class RecordingService {
     this.d.status.setWarning("recording", null);
     this.set({ name: "starting", meeting, auto: trigger.source === "auto", pendingStop: false });
     this.d.bus.publish({ type: "meeting", meeting });
-    this.d.agent.send({ cmd: "start", meetingId: meeting.id, path: this.d.repo.recordingPath(meeting.id), ...QUALITY[this.d.settings().quality] });
+    this.crashed = null;
+    const t = this.d.settings().transcription;
+    this.d.agent.send({
+      cmd: "start", meetingId: meeting.id, path: this.d.repo.recordingPath(meeting.id), ...QUALITY[this.d.settings().quality],
+      // Live transcript while recording (Apple's model; the agent skips it where unavailable).
+      ...(t.enabled ? { liveLocale: t.language } : {}),
+    });
     this.armTimer({ type: "startTimeout", meetingId: meeting.id }, START_TIMEOUT_MS);
   }
 
@@ -251,12 +268,14 @@ export class RecordingService {
       this.d.bus.publish({ type: "meetingDeleted", id: meeting.id });
       return;
     }
+    const live = await this.liveTranscriptIsFinal(meeting);
     const done: Meeting = {
       ...meeting,
       status: "complete",
       endedAt: new Date().toISOString(),
       durationSec,
       sizeBytes,
+      ...(live ? { transcript: "done" as const, transcriptError: null } : {}),
     };
     await this.d.repo.save(done);
     await this.d.repo.removeState(meeting.id);
@@ -266,7 +285,11 @@ export class RecordingService {
   /** Recovers the file; if there was nothing recorded the folder is gone, so tell the dashboard.
    *  Returns whether something playable was kept (a header with no complete chunk is not). */
   private async recoverFile(id: string): Promise<boolean> {
-    const recovered = await this.d.recovery.recoverOne(id);
+    let recovered = await this.d.recovery.recoverOne(id);
+    if (recovered && (await this.liveTranscriptIsFinal(recovered))) {
+      recovered = { ...recovered, transcript: "done", transcriptError: null };
+      await this.d.repo.save(recovered);
+    }
     this.d.bus.publish(recovered ? { type: "meeting", meeting: recovered } : { type: "meetingDeleted", id });
     return (recovered?.durationSec ?? 0) > 0;
   }
@@ -286,6 +309,20 @@ export class RecordingService {
       this.d.status.setWarning("recording", "Couldn't finish saving the last recording. It will be recovered automatically.");
     } finally {
       this.set({ name: "idle" });
+    }
+  }
+
+  /** The agent writes transcript.json live, and only when it covers the whole meeting. With
+   *  Apple's engine that IS the transcript: ready the moment the meeting ends (the summary
+   *  follows). With Whisper, the live lines were shown during the meeting and Whisper's more
+   *  accurate transcript is made after it, replacing the file. */
+  private async liveTranscriptIsFinal(meeting: Meeting): Promise<boolean> {
+    if (meeting.transcript !== "none" || this.d.settings().transcription.engine !== "apple") return false;
+    try {
+      const written = (await stat(join(this.d.repo.dir(meeting.id), "transcript.json"))).mtimeMs;
+      return written >= Date.parse(meeting.startedAt); // from this recording, not an older file
+    } catch {
+      return false; // no live transcript (not macOS 26, incomplete, or too slow): the usual job does it
     }
   }
 

@@ -83,9 +83,30 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 | `MeetingRecorderTranscriber` | Separate executable; see below. |
 | `AgentCore` | Pure logic (wire format, validator, capture math, transcript format), checked by `swift run AgentCoreChecks`. The Command Line Tools ship without XCTest. |
 
+## Live transcript (`LiveTranscriber.swift`, macOS 26)
+
+```
+daemon start {…, liveLocale} ─▶ agent: SpeechAnalyzer + SpeechTranscriber ×2 ("Others" = system audio, "You" = mic)
+  same retimed audio the writer gets ─▶ own utility queue: convert to the analyzer format ─▶ AnalyzerInput
+  final results ─▶ {type:"transcript"} events ─▶ daemon ─▶ {type:"liveTranscript"} SSE ─▶ dashboard card
+  stop ─▶ writer finishes first (the video is safe) ─▶ live finish, ≤10 s ─▶ transcript.json ─▶ "stopped"
+daemon: Apple engine ─▶ transcript "done" at once (summary follows) · Whisper ─▶ lines shown, then the Whisper job
+GET /api/meetings/:id/live ─▶ lines so far (dashboard opened or reloaded mid-meeting); in memory, 2 meetings × 5,000 lines
+```
+
+transcript.json is written only when the live transcript covers the whole meeting: the analyzers start alongside capture (so the first seconds are heard), and a track error or a finish slower than 10 s means nothing is written and the after-meeting job runs instead. Lines are accepted only for the meeting being recorded.
+
+Best effort: if the language or the model isn't available yet (it's requested for next time), the meeting is transcribed after it ends as before; a live failure never touches the recording.
+
+## Recorder robustness
+
+- Audio is placed on a continuous timeline (`AgentCore/AudioTimeline.swift`) before the writer: time = anchor + samples so far / rate; drift within ±100 ms is absorbed, a real pause restarts the timeline, a buffer far in the past is dropped. A mid-meeting mic append failure (-11800 / -16341) was observed with ScreenCaptureKit's arrival timestamps.
+- If the writer still fails mid-meeting, `DetectionService` continues in a new recording ("… (continued)"), up to 3 times per meeting; a user's Stop is never undone.
+- A floating REC pill (`RecordingIndicator.swift`) and a timer next to the menu-bar icon show recording is on; the app's own windows are excluded from capture.
+
 ## Transcription and summaries (`services/TranscriptionService.ts` + `MeetingRecorderTranscriber`)
 
-Two kinds of job run one at a time, newest meeting first, under the same rules (idle, plugged in, watchdog, 3 retries, cancelled when a recording starts):
+Two kinds of job run one at a time, newest meeting first, under the same rules (not recording, battery is fine, watchdog, 3 retries, cancelled when a recording starts):
 
 1. **Transcribe:** described below.
 2. **Summarize:** `MeetingRecorderTranscriber --summarize <dir>`, run only after the transcript is done.
@@ -134,7 +155,7 @@ Optional, chosen in Settings (`transcription.engine`, `transcription.summaryEngi
 ```
 
 Resource rules:
-- Every job (both engines, and share copies) is spawned through `taskpolicy -b`: background QoS, so the work goes to the efficiency cores at low I/O priority. Jobs still run only when the Mac is idle and plugged in.
+- Every job (both engines, and share copies) is spawned through `taskpolicy -b`: background QoS, so the work goes to the efficiency cores at low I/O priority. Jobs still run only when nothing is being recorded (on battery too: they no longer wait for a charger).
 - Each job leads its own process group and is stopped as a group, so llama.cpp never outlives a cancelled or killed summary.
 - Once verified, models are used straight from disk with no network call (works offline). After that a run only checks each Whisper file's size (a stat), so a deleted or damaged file is fetched again and verified. The Whisper tokenizer is kept in the same folder (WhisperKit's default would be ~/Documents).
 - A download that fails on the network exits 5 (queued, tried again in 10 minutes, retries not used up). A file that doesn't match its pinned SHA-256 is deleted and exits 6 (failed, reason shown).

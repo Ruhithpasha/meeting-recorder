@@ -225,7 +225,7 @@ describe("TranscriptPanel (via MeetingPlayer)", () => {
   it("explains waiting, running and failed (with Retry)", async () => {
     const calls = mockFetch({ [`POST /api/meetings/${meeting(1).id}/transcribe`]: () => json(meeting(1, { transcript: "queued" }), { status: 202 }) });
     const { rerender } = render(<MeetingPlayer meeting={meeting(1, { transcript: "none" })} onDeleted={vi.fn()} />);
-    expect(screen.getByText(/idle and plugged in/)).toBeInTheDocument();
+    expect(screen.getByText(/after the meeting/)).toBeInTheDocument();
     rerender(<MeetingPlayer meeting={meeting(1, { transcript: "running" })} onDeleted={vi.fn()} />);
     expect(screen.getByText(/Transcribing on this Mac/)).toBeInTheDocument();
     rerender(<MeetingPlayer meeting={meeting(1, { transcript: "failed" })} onDeleted={vi.fn()} />);
@@ -491,5 +491,39 @@ describe("downloading open models", () => {
     render(<SettingsView />);
     expect(await screen.findByText(/HTTP 503/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+});
+
+describe("live transcript", () => {
+  it("shows lines of the meeting being recorded as they arrive", async () => {
+    mockFetch({ [`GET /api/meetings/${meeting(1).id}/live`]: () => json([]) });
+    const live = meeting(1, { status: "recording", durationSec: null, sizeBytes: null });
+    const { rerender } = render(<MeetingPlayer meeting={live} onDeleted={vi.fn()} />);
+    expect(screen.getByRole("region", { name: "Live transcript" })).toHaveTextContent(/Listening/);
+    rerender(<MeetingPlayer meeting={live} liveLines={[{ start: 3, end: 5, speaker: "You", text: "Can everyone hear me?" }]} onDeleted={vi.fn()} />);
+    expect(screen.getByText("Can everyone hear me?")).toBeInTheDocument();
+    expect(screen.getByText("You")).toBeInTheDocument();
+  });
+
+  it("isn't shown once the meeting's real transcript is done", () => {
+    mockFetch({ [`GET /api/meetings/${meeting(1).id}/transcript`]: () => json({ version: 1, language: "en", durationSec: 1, segments: [] }) });
+    render(<MeetingPlayer meeting={meeting(1, { transcript: "done" })} liveLines={[{ start: 3, end: 5, speaker: "You", text: "old" }]} onDeleted={vi.fn()} />);
+    expect(screen.queryByRole("region", { name: /Live transcript/ })).toBeNull();
+  });
+
+  it("stays after the meeting until the full transcript is ready", () => {
+    mockFetch({ [`GET /api/meetings/${meeting(1).id}/live`]: () => json([]) });
+    render(<MeetingPlayer meeting={meeting(1, { transcript: "running" })} liveLines={[{ start: 3, end: 5, speaker: "Others", text: "See you Friday" }]} onDeleted={vi.fn()} />);
+    expect(screen.getByRole("region", { name: "Live transcript" })).toHaveTextContent(/full transcript is on its way/);
+    expect(screen.getByText("See you Friday")).toBeInTheDocument();
+  });
+
+  it("opened mid-meeting, loads the lines said so far, without repeating the ones that also stream in", async () => {
+    const line = { start: 1, end: 2, speaker: "Others", text: "Good morning" };
+    mockFetch({ [`GET /api/meetings/${meeting(1).id}/live`]: () => json([line]) });
+    render(<MeetingPlayer meeting={meeting(1, { status: "recording", durationSec: null, sizeBytes: null })}
+      liveLines={[line, { start: 4, end: 5, speaker: "You", text: "Hi all" }]} onDeleted={vi.fn()} />);
+    expect(await screen.findByText("Hi all")).toBeInTheDocument();
+    expect(screen.getAllByText("Good morning")).toHaveLength(1);
   });
 });

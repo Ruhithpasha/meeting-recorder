@@ -52,6 +52,7 @@ export const api = {
   /** Opens the macOS share sheet; "exporting" means a smaller copy is being made first. */
   share: (id: string, what: ShareWhat) =>
     request<{ state: "shared" | "exporting" }>(`/api/meetings/${encodeURIComponent(id)}/share`, { method: "POST", body: JSON.stringify({ what }) }),
+  live: (id: string) => request<Transcript["segments"]>(`/api/meetings/${encodeURIComponent(id)}/live`),
   reveal: (id: string) => request<void>(`/api/meetings/${encodeURIComponent(id)}/reveal`, { method: "POST" }),
   transcribe: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/transcribe`, { method: "POST" }),
 };

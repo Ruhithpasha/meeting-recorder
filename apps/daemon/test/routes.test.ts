@@ -313,6 +313,17 @@ describe("reveal in Finder", () => {
   });
 });
 
+describe("live transcript API", () => {
+  it("GET /:id/live returns the lines so far (for a dashboard reloaded mid-meeting); 404 for an unknown meeting", async () => {
+    const { app, id, container } = await withMeeting();
+    container.live.add(id, { start: 1, end: 2, speaker: "Others", text: "Morning" });
+    const res = await app.inject({ url: `/api/meetings/${id}/live`, headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([{ start: 1, end: 2, speaker: "Others", text: "Morning" }]);
+    expect((await app.inject({ url: "/api/meetings/2020-01-01_00-00-00_none/live", headers: AUTH })).statusCode).toBe(404);
+  });
+});
+
 describe("models API", () => {
   it("GET /api/models reports each engine; download validates the engine and maps refusals to 409", async () => {
     const { app } = await makeApp(); // no transcriber installed
