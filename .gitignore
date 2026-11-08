@@ -1,0 +1,5 @@
+spike/macos/record
+spike/macos/probe
+*.mp4
+.DS_Store
+node_modules/
