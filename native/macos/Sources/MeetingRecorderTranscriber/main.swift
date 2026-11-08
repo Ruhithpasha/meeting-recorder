@@ -41,13 +41,14 @@ func option(_ name: String) -> String? {
 let engine = option("--engine") ?? "apple"
 let modelsDir = URL(fileURLWithPath: option("--models") ?? NSString(string: "~/.meeting-recorder/models").expandingTildeInPath)
 
-/// Runs one async job and exits with its code (errors: 4, worth retrying).
+/// Runs one async job and exits with its code (model downloads: 5 or 6; other errors: 4, worth retrying).
 func runJob(_ failure: String, _ body: @escaping @Sendable () async throws -> [String: Any]) -> Never {
     Task {
         do {
             emit(try await body())
             exit(0)
         } catch {
+            DownloadError.exitIfDownload(error)
             fail(4, "\(failure): \(error.localizedDescription)")
         }
     }

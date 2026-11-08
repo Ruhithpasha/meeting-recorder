@@ -10,7 +10,8 @@ let package = Package(
     // install builds from source, so every Mac gets the same, reviewed code.
     dependencies: [.package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "0.18.0")],
     targets: [
-        // Pure logic: wire protocol, command validation, config, capture math. No UI, no capture.
+        // Pure logic and data checked by AgentCoreChecks: wire protocol, command validation, config,
+        // capture math, transcript/summary text, the pinned Whisper manifest. No UI, no capture.
         .target(name: "AgentCore", path: "Sources/AgentCore"),
         // The menu-bar app: capture, mic detection, permissions, daemon supervision.
         .executableTarget(name: "MeetingRecorderAgent", dependencies: ["AgentCore"], path: "Sources/MeetingRecorderAgent"),

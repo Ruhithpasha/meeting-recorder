@@ -122,7 +122,9 @@ Measured: 11 s of speech transcribed in about 1 s, with our process using 0.05 s
 Optional, chosen in Settings (`transcription.engine`, `transcription.summaryEngine`); the daemon passes `--engine whisper|qwen --models ~/.meeting-recorder/models`.
 
 ```
---engine whisper  WhisperKit 0.18.0 (exact SwiftPM pin) ─▶ argmaxinc/whisperkit-coreml large-v3 turbo 632 MB
+--engine whisper  WhisperKit 0.18.0 (exact SwiftPM pin) runs argmaxinc/whisperkit-coreml large-v3 turbo 632 MB
+                  downloaded by us, not WhisperKit: 25 files from pinned commits, each SHA-256 checked
+                  (AgentCore/WhisperManifest.swift, built from Hugging Face's LFS/git records), tokenizer included
                   same per-track 16 kHz PCM + TranscriptCleanup; VAD chunking, 1 decoder worker
 --engine qwen     llama.cpp b12202 prebuilt (SHA-256 pinned) + Qwen3-1.7B Q8_0 GGUF (revision + SHA-256 pinned)
                   llama-completion: 6k context, q8_0 KV cache, ≤4 threads, JSON-schema-constrained output
@@ -132,7 +134,8 @@ Optional, chosen in Settings (`transcription.engine`, `transcription.summaryEngi
 Resource rules:
 - Every job (both engines, and share copies) is spawned through `taskpolicy -b`: background QoS, so the work goes to the efficiency cores at low I/O priority. Jobs still run only when the Mac is idle and plugged in.
 - Each job leads its own process group and is stopped as a group, so llama.cpp never outlives a cancelled or killed summary.
-- Once downloaded, models are used straight from disk with no network call (works offline). The Whisper tokenizer is cached in the same folder (WhisperKit's default would be ~/Documents).
+- Once verified, models are used straight from disk with no network call (works offline). After that a run only checks each Whisper file's size (a stat), so a deleted or damaged file is fetched again and verified. The Whisper tokenizer is kept in the same folder (WhisperKit's default would be ~/Documents).
+- A download that fails on the network exits 5 (queued, tried again in 10 minutes, retries not used up). A file that doesn't match its pinned SHA-256 is deleted and exits 6 (failed, reason shown).
 - Whisper has its own language list (`whisperLanguages`, ~100 codes), so a fixed language can be chosen on any macOS.
 - Downloads happen inside the job, once. A file that fails its SHA-256 check is deleted, never used. While downloading, `{"status":"downloading"}` lines restart the daemon's time limit.
 - `--capabilities` reports why an engine can't run here (Intel Mac; less than 8 GB for Qwen), and Settings disables that choice with the reason.

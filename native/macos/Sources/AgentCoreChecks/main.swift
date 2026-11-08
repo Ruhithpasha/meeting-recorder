@@ -151,6 +151,37 @@ check(OpenModelText.parseSummary("no json") == nil && OpenModelText.parseSummary
 check(OpenModelText.parseNotes(#"{"points":["one","two"]}"#) == "- one\n- two", "Qwen notes parsed")
 check(OpenModelText.chatPrompt(system: "S", user: "U").hasSuffix("<think>\n\n</think>\n\n") && OpenModelText.chatPrompt(system: "S", user: "U").contains("U /no_think"), "Qwen prompt has thinking off")
 
+// MARK: Whisper manifest (supply chain: every file pinned and fingerprinted)
+let wPaths = Set(WhisperManifest.files.map(\.path))
+check(["AudioEncoder.mlmodelc", "TextDecoder.mlmodelc", "MelSpectrogram.mlmodelc"].allSatisfy { bundle in wPaths.contains { $0.hasPrefix("\(WhisperManifest.modelFolder)/\(bundle)/") } }
+      && wPaths.contains("models/openai/whisper-large-v3/tokenizer.json"), "manifest has the model bundles WhisperKit loads and the tokenizer")
+check(WhisperManifest.files.allSatisfy { $0.path.hasPrefix(WhisperManifest.modelFolder + "/") || $0.path.hasPrefix("models/openai/whisper-large-v3/") }, "every Whisper file sits in the loaded folder or the tokenizer folder")
+// filesToFetch: first run hashes, resumes; after the marker only a stat (offline), and repairs.
+let wRoot = FileManager.default.temporaryDirectory.appendingPathComponent("mr-whisper-\(UUID().uuidString)")
+func place(_ file: WhisperManifest.File, size: Int64? = nil) {
+    let url = wRoot.appendingPathComponent(file.path)
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: url.path, contents: Data(count: Int(min(size ?? file.size, 64))))
+    if (size ?? file.size) > 64 { let h = try! FileHandle(forWritingTo: url); try! h.truncate(atOffset: UInt64(size ?? file.size)); try! h.close() }
+}
+let fakeHash: (URL) -> String? = { url in WhisperManifest.files.first { wRoot.appendingPathComponent($0.path) == url }?.sha256 }
+check(WhisperManifest.filesToFetch(root: wRoot, hash: fakeHash).count == WhisperManifest.files.count, "empty folder: fetch everything")
+for f in WhisperManifest.files.dropLast() { place(f) }
+check(WhisperManifest.filesToFetch(root: wRoot, hash: fakeHash).map(\.path) == [WhisperManifest.files.last!.path], "interrupted download resumes with the missing file only")
+place(WhisperManifest.files.last!)
+check(WhisperManifest.filesToFetch(root: wRoot, hash: { _ in "bad" }).count == WhisperManifest.files.count, "unverified files with wrong hashes are fetched again")
+FileManager.default.createFile(atPath: wRoot.appendingPathComponent(WhisperManifest.marker).path, contents: Data())
+var hashed = 0
+check(WhisperManifest.filesToFetch(root: wRoot, hash: { _ in hashed += 1; return "bad" }).isEmpty && hashed == 0, "verified model: no hashing, nothing to fetch (works offline)")
+place(WhisperManifest.files[0], size: 10)
+try? FileManager.default.removeItem(at: wRoot.appendingPathComponent(WhisperManifest.files[1].path))
+check(WhisperManifest.filesToFetch(root: wRoot, hash: fakeHash).map(\.path) == [WhisperManifest.files[0].path, WhisperManifest.files[1].path], "a damaged or deleted file is repaired")
+try? FileManager.default.removeItem(at: wRoot)
+check(WhisperManifest.files.allSatisfy { $0.sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil && $0.size > 0 }, "every Whisper file has a SHA-256 and size")
+check(WhisperManifest.files.allSatisfy { $0.url.hasPrefix("https://huggingface.co/") && $0.url.contains("/resolve/") && $0.url.range(of: "/resolve/[0-9a-f]{40}/", options: .regularExpression) != nil }, "every Whisper URL is pinned to a commit")
+check(WhisperManifest.files.allSatisfy { $0.path.hasPrefix("models/") && !$0.path.contains("..") }, "Whisper files stay inside the models folder")
+check(WhisperManifest.files.reduce(0) { $0 + $1.size } < 700_000_000, "Whisper download stays under 700 MB")
+
 // MARK: Share command
 let shareValidator = CommandValidator()
 if case .success(.share(let c)) = shareValidator.decode(#"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"share.mp4"}"#) { check(c.file == .shareMp4, "share decoded") } else { check(false, "share accepted") }

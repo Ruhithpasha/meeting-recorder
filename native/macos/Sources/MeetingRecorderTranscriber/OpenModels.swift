@@ -1,7 +1,8 @@
 // Open models from Hugging Face (and llama.cpp from GitHub), downloaded once into
 // ~/.meeting-recorder/models and run on this Mac. Nothing about a meeting is ever uploaded.
 //
-//   whisper  argmaxinc/whisperkit-coreml @ pinned revision, large-v3 turbo (632 MB, Core ML)
+//   whisper  argmaxinc/whisperkit-coreml @ pinned revision, large-v3 turbo (632 MB, Core ML),
+//            every file SHA-256 checked (WhisperManifest.swift)
 //            ~300 MB of memory, runs on the Neural Engine
 //   qwen     Qwen/Qwen3-1.7B-GGUF Q8_0 (1.8 GB, SHA-256 pinned), run by llama.cpp b12202
 //            (SHA-256 pinned). The model file is memory-mapped: macOS can drop and re-read those
@@ -16,8 +17,6 @@ import WhisperKit
 enum OpenModels {
     struct Pinned { let url: String; let sha256: String; let file: String }
 
-    static let whisperVariant = "openai_whisper-large-v3-v20240930_turbo_632MB"
-    static let whisperRepo = "argmaxinc/whisperkit-coreml"
     static let llama = Pinned(
         url: "https://github.com/ggml-org/llama.cpp/releases/download/b12202/llama-b12202-bin-macos-arm64.tar.gz",
         sha256: "e70cd5918fb1db75652cee66bd6ab9c933cc0c5acf632f15df672c00829ebcaf", file: "llama-b12202.tar.gz")
@@ -46,17 +45,24 @@ enum OpenModels {
     /// Whisper's language codes ("hi", "en", …), for the language picker on any macOS.
     static var whisperLanguages: [String] { Array(Set(Constants.languages.values)).sorted() }
 
-    /// The Core ML model folder, downloaded on first use. Once on disk it's used as is, with no
-    /// network at all (offline, or Hugging Face down, still works).
+    /// The Core ML model folder: every file in WhisperManifest, from pinned revisions, each
+    /// SHA-256 checked on download. See WhisperManifest.filesToFetch for when anything is fetched.
     static func whisperFolder(models: URL) async throws -> URL {
-        let local = models.appendingPathComponent("whisper/models/\(whisperRepo)/\(whisperVariant)")
-        if FileManager.default.fileExists(atPath: local.appendingPathComponent("AudioEncoder.mlmodelc").path),
-           FileManager.default.fileExists(atPath: local.appendingPathComponent("TextDecoder.mlmodelc").path) { return local }
-        var last = -1
-        return try await WhisperKit.download(variant: whisperVariant, downloadBase: models.appendingPathComponent("whisper"), from: whisperRepo) { progress in
-            let percent = Int(progress.fractionCompleted * 100)
-            if percent >= last + 5 { last = percent; emit(["status": "downloading", "percent": percent, "what": "Whisper model"]) }
+        let root = models.appendingPathComponent("whisper")
+        let checking = WhisperManifest.files.count
+        let fetch = WhisperManifest.filesToFetch(root: root, hash: { try? sha256(of: $0) }) { index in
+            // Hashing ~640 MB takes a while: keep the daemon's watchdog fed.
+            emit(["status": "downloading", "percent": index * 100 / checking, "what": "Checking the Whisper model"])
         }
+        let total = fetch.reduce(0) { $0 + $1.size }
+        var done: Int64 = 0
+        for file in fetch {
+            try await download(file.url, sha256: file.sha256, to: root.appendingPathComponent(file.path), what: "Whisper model", base: done, total: total)
+            done += file.size
+        }
+        let marker = root.appendingPathComponent(WhisperManifest.marker)
+        if !FileManager.default.fileExists(atPath: marker.path) { try Data().write(to: marker) }
+        return root.appendingPathComponent(WhisperManifest.modelFolder)
     }
 
     // MARK: llama.cpp + Qwen
@@ -81,14 +87,24 @@ enum OpenModels {
     static func fetch(_ pinned: Pinned, into dir: URL, what: String) async throws -> URL {
         let target = dir.appendingPathComponent(pinned.file)
         if FileManager.default.fileExists(atPath: target.path) { return target } // verified when it was saved
-        emit(["status": "downloading", "percent": 0, "what": what])
-        let progress = DownloadProgress(what: what)
-        let (temp, response) = try await URLSession.shared.download(from: URL(string: pinned.url)!, delegate: progress)
-        defer { try? FileManager.default.removeItem(at: temp) }
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw ModelError("\(what) download failed (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0))") }
-        guard try sha256(of: temp) == pinned.sha256 else { throw ModelError("\(what) download didn't match its fingerprint") }
-        try FileManager.default.moveItem(at: temp, to: target)
+        try await download(pinned.url, sha256: pinned.sha256, to: target, what: what)
         return target
+    }
+
+    /// One pinned file: download, check SHA-256, then move into place (a mismatch is deleted).
+    static func download(_ url: String, sha256 expected: String, to target: URL, what: String, base: Int64 = 0, total: Int64 = 0) async throws {
+        let progress = DownloadProgress(what: what, base: base, total: total)
+        let temp: URL, response: URLResponse
+        do { (temp, response) = try await URLSession.shared.download(from: URL(string: url)!, delegate: progress) }
+        catch { throw DownloadError.network("Couldn't download the \(what) (\(error.localizedDescription)). It will try again later.") }
+        defer { try? FileManager.default.removeItem(at: temp) }
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+            throw DownloadError.network("Couldn't download the \(what) (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)). It will try again later.")
+        }
+        guard try sha256(of: temp) == expected else { throw DownloadError.fingerprint("The downloaded \(what) didn't match its pinned fingerprint, so it wasn't used.") }
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.moveItem(at: temp, to: target)
     }
 
     static func sha256(of url: URL) throws -> String {
@@ -115,6 +131,21 @@ enum OpenModels {
     }
 }
 
+/// network: try again later (exit 5, doesn't use up retries). fingerprint: never use it (exit 6).
+enum DownloadError: Error {
+    case network(String)
+    case fingerprint(String)
+
+    /// Exits with the matching code; other errors are rethrown.
+    static func exitIfDownload(_ error: Error) {
+        switch error as? DownloadError {
+        case .network(let message): fail(5, message)
+        case .fingerprint(let message): fail(6, message)
+        case nil: return
+        }
+    }
+}
+
 struct ModelError: LocalizedError {
     let errorDescription: String?
     init(_ message: String) { errorDescription = message }
@@ -123,11 +154,19 @@ struct ModelError: LocalizedError {
 /// Emits download progress every 5%.
 final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     let what: String
-    private var last = 0
-    init(what: String) { self.what = what }
+    private let base: Int64, total: Int64
+    private var last: Int
+    /// base/total: this file's place in a multi-file download (0/0 for a single file).
+    init(what: String, base: Int64 = 0, total: Int64 = 0) {
+        self.what = what; self.base = base; self.total = total
+        last = total > 0 ? Int(base * 100 / total) : 0
+        emit(["status": "downloading", "percent": last, "what": what]) // a file is starting
+    }
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        guard totalBytesExpectedToWrite > 0 else { return }
-        let percent = Int(totalBytesWritten * 100 / totalBytesExpectedToWrite)
+        let percent: Int
+        if total > 0 { percent = Int((base + totalBytesWritten) * 100 / total) }
+        else if totalBytesExpectedToWrite > 0 { percent = Int(totalBytesWritten * 100 / totalBytesExpectedToWrite) }
+        else { return }
         if percent >= last + 5 { last = percent; emit(["status": "downloading", "percent": percent, "what": what]) }
     }
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {}
