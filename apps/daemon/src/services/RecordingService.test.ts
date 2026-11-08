@@ -157,7 +157,7 @@ describe("recording", () => {
     expect(c.repo.get(id)?.endedAt).not.toBeNull();
   });
 
-  it("agentError mid-recording -> file recovered, warning, idle", async () => {
+  it("agentError mid-recording -> file recovered, idle; no banner (the meeting says it was recovered)", async () => {
     const { c, id, dirs } = await recording();
     const { bytes } = appleFragmented({
       tracks: [{ id: 1, timescale: 600, initialDuration: 3000, defaultSampleDuration: 40 }],
@@ -168,7 +168,36 @@ describe("recording", () => {
     await c.recording.dispatch({ type: "agentError", meetingId: id, code: "writer", message: "Disk write failed" });
     expect(c.recording.stateName).toBe("idle");
     expect(c.repo.get(id)).toMatchObject({ status: "recovered", durationSec: 10 });
-    expect(c.status.get().warning).toBe("Disk write failed");
+    expect(c.status.get().warning).toBeNull();
+  });
+
+  it("agentError and recovery itself fails -> banner says it will be recovered later (not 'lost')", async () => {
+    const { c, id } = await recording();
+    c.recovery.recoverOne = async () => { throw Object.assign(new Error("EACCES"), { code: "EACCES" }); };
+    await c.recording.dispatch({ type: "agentError", meetingId: id, code: "writer", message: "Disk write failed" });
+    expect(c.recording.stateName).toBe("idle");
+    expect(c.status.get().warning).toMatch(/recovered automatically/);
+  });
+
+  it("a successful recovery clears an older recording banner", async () => {
+    const { c, id, dirs } = await recording();
+    c.status.setWarning("recording", "The recorder is taking long to save the last recording.");
+    const { bytes } = appleFragmented({
+      tracks: [{ id: 1, timescale: 600, initialDuration: 3000, defaultSampleDuration: 40 }],
+      fragments: [[{ trackId: 1, sampleDurations: Array<number>(75).fill(40) }]],
+      inProgressBytes: 100,
+    });
+    writeRecording(join(dirs.meetingsDir, id), bytes);
+    await c.recording.dispatch({ type: "agentError", meetingId: id, code: "writer", message: "Disk write failed" });
+    expect(c.status.get().warning).toBeNull();
+  });
+
+  it("agentError with nothing recoverable -> meeting removed, banner explains", async () => {
+    const { c, id } = await recording(); // no file written
+    await c.recording.dispatch({ type: "agentError", meetingId: id, code: "writer", message: "Disk write failed" });
+    expect(c.recording.stateName).toBe("idle");
+    expect(c.repo.get(id)).toBeUndefined();
+    expect(c.status.get().warning).toBe("The recording couldn't be saved: Disk write failed");
   });
 
   it("toggle stops", async () => {

@@ -45,6 +45,8 @@ An in-memory index (sorted ids, newest first) is built at startup (10,000 meetin
 
 ## Crash recovery (`services/RecoveryService.ts`, `lib/mp4.ts`)
 
+If the recorder's writer fails (reported as an `error` event), the daemon recovers the file at once, losing at most the last unsaved 5 s chunk. When that works, the meeting is marked "recovered" and shows a note; the raw AVFoundation error goes to the daemon log only, not to the banner. The banner appears only when nothing could be saved. The agent logs one diagnostics line on any writer failure: the failing step (append or finishWriting), and per track the samples written, last timestamp, samples dropped for not moving forward, and format changes.
+
 AVAssetWriter writes each fragment's data first, then the `moof` describing it, keeping in-progress data in a size-0 `mdat`. Recovery walks only box headers and `moof`s (never the video data), truncates after the last complete fragment, and sums durations (fragments carry no `tfdt`). It runs **after** the agent's `hello` and skips the meeting the agent reports as still recording, so a daemon restart never touches a live file. Verified against real recordings killed with `kill -9`.
 
 ## Meeting detection (`services/DetectionService.ts`, `detection-rules.json`)

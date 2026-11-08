@@ -205,8 +205,12 @@ export class RecordingService {
     const meeting = this.d.repo.get(event.meetingId);
     if (!meeting) return;
     try {
-      if (event.type === "agentStopped") await this.saveComplete(meeting, event.durationSec);
-      else await this.recoverFile(meeting.id);
+      if (event.type === "agentStopped") {
+        await this.saveComplete(meeting, event.durationSec);
+        this.d.status.setWarning("recording", null); // the "taking long to save" banner is over
+      } else {
+        this.reportRecovery(await this.recoverFile(meeting.id), event.message);
+      }
     } catch (error) {
       this.d.log.warn({ error, id: meeting.id }, "finalizing a detached meeting failed; recovery will retry");
     }
@@ -223,8 +227,19 @@ export class RecordingService {
     await this.toIdleAfter(() => this.saveComplete(meeting, durationSec));
   }
 
+  /** The agent's writer failed. Recovery keeps everything up to the last saved chunk (≤5 s lost).
+   *  If that worked, the meeting's own "recovered" note says so and the raw AVFoundation error goes
+   *  to the log only; the banner is for when nothing could be saved. */
   private async recoverAndIdle(meeting: Meeting, message: string): Promise<void> {
-    await this.toIdleAfter(() => this.recoverFile(meeting.id), message);
+    this.d.log.warn({ id: meeting.id, error: message }, "recorder reported an error; recovering the file");
+    // If recovery itself throws, toIdleAfter's "will be recovered automatically" banner stands.
+    await this.toIdleAfter(async () => this.reportRecovery(await this.recoverFile(meeting.id), message));
+  }
+
+  /** Banner after a writer error: none when something playable was kept (the meeting shows its
+   *  own "recovered" note), an explanation when nothing was. Replaces any older recording banner. */
+  private reportRecovery(saved: boolean, message: string): void {
+    this.d.status.setWarning("recording", saved ? null : `The recording couldn't be saved: ${message}`);
   }
 
   private async saveComplete(meeting: Meeting, durationSec: number): Promise<void> {
@@ -248,10 +263,12 @@ export class RecordingService {
     this.d.bus.publish({ type: "meeting", meeting: done });
   }
 
-  /** Recovers the file; if there was nothing recorded the folder is gone, so tell the dashboard. */
-  private async recoverFile(id: string): Promise<void> {
+  /** Recovers the file; if there was nothing recorded the folder is gone, so tell the dashboard.
+   *  Returns whether something playable was kept (a header with no complete chunk is not). */
+  private async recoverFile(id: string): Promise<boolean> {
     const recovered = await this.d.recovery.recoverOne(id);
     this.d.bus.publish(recovered ? { type: "meeting", meeting: recovered } : { type: "meetingDeleted", id });
+    return (recovered?.durationSec ?? 0) > 0;
   }
 
   /**

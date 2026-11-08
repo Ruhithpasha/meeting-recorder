@@ -37,6 +37,23 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         var startPTS: CMTime?
         var lastPTS: CMTime = .invalid
         var finishing = false
+        /// Per input (video, system, mic), for the diagnostics logged when the writer fails.
+        var appended = [0, 0, 0]
+        var lastAppended: [CMTime] = [.invalid, .invalid, .invalid]
+        var dropped = [0, 0, 0]          // timestamp not after the input's previous sample
+        var formats: [CMFormatDescription?] = [nil, nil, nil]
+        var formatChanges = [0, 0, 0]
+
+        /// One line for the log: what each track had received when the writer failed.
+        func diagnostics(step: String) -> String {
+            let names = ["video", "system", "mic"]
+            let start = startPTS ?? .zero
+            let tracks = (0..<3).map { i -> String in
+                let last = lastAppended[i].isValid ? String(format: "%.2fs", CMTimeSubtract(lastAppended[i], start).seconds) : "-"
+                return "\(names[i]): \(appended[i]) samples, last \(last), \(dropped[i]) dropped, \(formatChanges[i]) format changes"
+            }
+            return "writer failed during \(step); status \(writer.status.rawValue); " + tracks.joined(separator: "; ")
+        }
         init(meetingId: String, writer: AVAssetWriter, inputs: [AVAssetWriterInput], fps: Int) {
             self.meetingId = meetingId
             self.writer = writer
@@ -157,12 +174,32 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             report { self.onStarted?(id) }
         }
         guard let start = s.startPTS, pts >= start else { return }
+        // A sample that doesn't move its track forward is dropped rather than handed to the
+        // writer. Checked before the frame pacer, so a duplicate frame doesn't use up a slot.
+        if s.lastAppended[index].isValid, CMTimeCompare(pts, s.lastAppended[index]) <= 0 {
+            s.dropped[index] += 1
+            return
+        }
         if index == 0, !s.pacer.accept(pts) { return }
+        // Real format changes only (size, sample rate, channels), not per-frame metadata. Pointer
+        // check first: the same description object is reused frame after frame, so this is cheap.
+        if let format = buffer.formatDescription, format !== s.formats[index] {
+            if let previous = s.formats[index], Self.formatKey(previous) != Self.formatKey(format) {
+                s.formatChanges[index] += 1
+                if s.formatChanges[index] == 1 {
+                    Log.warn("recording \(s.meetingId): input \(index) changed from \(Self.formatKey(previous)) to \(Self.formatKey(format)) at \(String(format: "%.2f", CMTimeSubtract(pts, start).seconds)) s")
+                }
+            }
+            s.formats[index] = format
+        }
 
         let input = s.inputs[index]
         if input.isReadyForMoreMediaData, input.append(buffer) {
+            s.appended[index] += 1
+            s.lastAppended[index] = pts
             if index == 0 || CMTimeCompare(pts, s.lastPTS) > 0 { s.lastPTS = pts }
         } else if s.writer.status == .failed {
+            Log.warn("recording \(s.meetingId): " + s.diagnostics(step: "append to input \(index)"))
             finish(s, error: .writer(RecorderError.describe(s.writer.error)))
         }
     }
@@ -205,6 +242,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             let outcome: (Double?, RecorderError?) = {
                 if let error { return (nil, error) }
                 if ok || neverStarted { return (neverStarted ? 0 : max(0, duration), nil) }
+                Log.warn("recording \(id): " + self.queue.sync { s.diagnostics(step: "finishWriting") })
                 return (nil, .writer(RecorderError.describe(s.writer.error)))
             }()
             let finished: ((String, Double?, RecorderError?) -> Void)? = self.queue.sync {
@@ -224,6 +262,16 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
     }
 
     // MARK: Helpers
+
+    /// What matters to the writer about a format: codec, and size or sample rate / channels.
+    private static func formatKey(_ format: CMFormatDescription) -> String {
+        let codec = CMFormatDescriptionGetMediaSubType(format)
+        if let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee {
+            return "audio \(codec) \(Int(asbd.mSampleRate)) Hz \(asbd.mChannelsPerFrame) ch flags \(asbd.mFormatFlags)"
+        }
+        let size = CMVideoFormatDescriptionGetDimensions(format)
+        return "video \(codec) \(size.width)x\(size.height)"
+    }
 
     private static func makeWriter(path: String, width: Int, height: Int, fps: Int) throws -> (writer: AVAssetWriter, inputs: [AVAssetWriterInput]) {
         let writer = try AVAssetWriter(outputURL: URL(fileURLWithPath: path), fileType: .mp4)
