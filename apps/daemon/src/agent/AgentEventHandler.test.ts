@@ -35,7 +35,7 @@ describe("agent events", () => {
     const { container: c, dirs } = await makeContainer();
     const { bytes } = appleFragmented({ tracks: [{ id: 1, timescale: 600, initialDuration: 600, defaultSampleDuration: 40 }], fragments: [], inProgressBytes: 50 });
     for (const id of ["2026-11-08_09-00-00_crashed", "2026-11-08_10-00-00_live"]) {
-      await c.repo.create({ id, app: "Zoom", title: "x", startedAt: new Date().toISOString(), endedAt: null, durationSec: null, sizeBytes: null, status: "recording", transcript: "none" });
+      await c.repo.create({ id, app: "Zoom", title: "x", startedAt: new Date().toISOString(), endedAt: null, durationSec: null, sizeBytes: null, status: "recording", transcript: "none", summary: "none" });
       writeFileSync(join(dirs.meetingsDir, id, "recording.mp4"), bytes);
     }
     await c.onAgentEvent(hello({ activeMeetingId: "2026-11-08_10-00-00_live" }));

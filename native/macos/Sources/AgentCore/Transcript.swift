@@ -58,13 +58,7 @@ public struct Transcript: Codable, Equatable, Sendable {
     public func write(to directory: URL) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try Self.atomicWrite(encoder.encode(self), to: directory.appendingPathComponent("transcript.json"))
-        try Self.atomicWrite(Data(vtt().utf8), to: directory.appendingPathComponent("transcript.vtt"))
-    }
-
-    private static func atomicWrite(_ data: Data, to url: URL) throws {
-        let tmp = url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).tmp")
-        try data.write(to: tmp)
-        _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+        try FileWriting.atomic(encoder.encode(self), to: directory.appendingPathComponent("transcript.json"))
+        try FileWriting.atomic(Data(vtt().utf8), to: directory.appendingPathComponent("transcript.vtt"))
     }
 }

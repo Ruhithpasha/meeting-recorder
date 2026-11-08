@@ -1,6 +1,7 @@
-// Transcribes a recording on this Mac with Apple's on-device SpeechTranscriber (macOS 26+).
+// Transcribes (SpeechTranscriber) and summarizes (Foundation Models) recordings on this Mac (macOS 26+).
 //
 //   MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale en_US]
+//   MeetingRecorderTranscriber --summarize <meeting dir>        (see Summarizer.swift)
 //
 //   recording.mp4 ── audio track 1 (system: "Others") ─┐  AVAssetReader → analyzer's PCM format
 //                └─ audio track 2 (mic: "You")       ─┴─▶ SpeechAnalyzer + SpeechTranscriber ─▶ segments
@@ -8,8 +9,10 @@
 //
 // Separate tracks give speaker labels for free. The heavy lifting runs in Apple's speech service,
 // not in this process. Progress goes to stdout as JSON lines: {"percent":42}.
-// Exit 3 is reserved for "transcription can't work on this Mac" (OS version, language).
-// Exit codes: 0 done, 2 bad input, 3 unavailable (OS/locale), 4 failed.
+// Exit codes: 0 done · 2 bad input · 3 unavailable on this Mac (OS, language, Apple Intelligence off)
+//             4 failed (worth retrying) · 5 not ready yet (e.g. model still downloading: retry later)
+//             6 failed for good on this input (e.g. the model declined): don't retry
+//   MeetingRecorderTranscriber --list-locales     JSON array of supported language ids
 import AVFoundation
 import AgentCore
 import Foundation
@@ -28,6 +31,31 @@ func fail(_ code: Int32, _ message: String) -> Never {
 }
 
 let args = CommandLine.arguments
+
+if args.count >= 2, args[1] == "--list-locales" {
+    guard #available(macOS 26.0, *) else { print("[]"); exit(0) }
+    Task {
+        let ids = await SpeechTranscriber.supportedLocales.map(\.identifier).sorted()
+        print(String(data: (try? JSONSerialization.data(withJSONObject: ids)) ?? Data("[]".utf8), encoding: .utf8)!)
+        exit(0)
+    }
+    dispatchMain()
+}
+
+if args.count >= 3, args[1] == "--summarize" {
+    guard #available(macOS 26.0, *) else { fail(3, "Summaries need macOS 26 or later.") }
+    Task {
+        do {
+            try await Summarizer.run(directory: URL(fileURLWithPath: args[2]))
+            emit(["done": true])
+            exit(0)
+        } catch {
+            fail(4, "Summary failed: \(error.localizedDescription)")
+        }
+    }
+    dispatchMain()
+}
+
 guard args.count >= 3 else { fail(2, "usage: MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale id]") }
 let input = URL(fileURLWithPath: args[1])
 let outputDir = URL(fileURLWithPath: args[2])
@@ -57,11 +85,11 @@ func transcribe() async throws -> Transcript {
             emit(["status": "downloading-model"])
             try await request.downloadAndInstall()
         }
-        // One track at a time, copied to a small audio file. The analyzer then
-        // reads the file at its own pace, so memory stays flat even for a 3-hour meeting.
+        // One track at a time, decoded once to uncompressed 16 kHz mono audio on disk (no second
+        // lossy encode, which hurt accuracy). The analyzer reads it at its own pace: memory stays flat.
         let exported: URL
-        do { exported = try await exportTrack(track, of: asset, to: scratch.appendingPathComponent("track\(index).m4a")) }
-        catch { throw StepError(step: "copying audio track \(index + 1)", underlying: error) }
+        do { exported = try await extractPCM(track, of: asset, to: scratch.appendingPathComponent("track\(index).caf")) }
+        catch { throw StepError(step: "reading audio track \(index + 1)", underlying: error) }
         let audioFile: AVAudioFile
         do { audioFile = try AVAudioFile(forReading: exported) }
         catch { throw StepError(step: "opening audio track \(index + 1)", underlying: error) }
@@ -92,7 +120,7 @@ func transcribe() async throws -> Transcript {
         } catch { throw StepError(step: "transcribing audio track \(index + 1)", underlying: error) }
         segments += try await collector.value
     }
-    return Transcript(language: locale.identifier, durationSec: duration, segments: segments)
+    return Transcript(language: locale.identifier, durationSec: duration, segments: TranscriptCleanup.clean(segments))
 }
 
 struct StepError: LocalizedError {
@@ -101,21 +129,54 @@ struct StepError: LocalizedError {
     var errorDescription: String? { "\(step): \((underlying as NSError).localizedDescription) (\((underlying as NSError).domain) \((underlying as NSError).code))" }
 }
 
-/// Copies one audio track into its own .m4a (fast, small, no PCM held in memory).
+/// Decodes one audio track to 16-bit, 16 kHz mono PCM in a temporary file, buffer by buffer.
+/// AVAssetReader resamples and downmixes; nothing is re-encoded lossily and memory stays flat.
 @available(macOS 26.0, *)
-func exportTrack(_ track: AVAssetTrack, of asset: AVAsset, to url: URL) async throws -> URL {
-    let composition = AVMutableComposition()
-    guard let audio = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+func extractPCM(_ track: AVAssetTrack, of asset: AVAsset, to url: URL) async throws -> URL {
+    guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true) else {
         throw CocoaError(.fileWriteUnknown)
     }
-    let range = try await track.load(.timeRange)
-    try audio.insertTimeRange(range, of: track, at: range.start)
-    // AppleM4A re-encodes to AAC (fast for audio). Passthrough isn't supported for these tracks
-    // (AVFoundation -11838), and either way the data streams through disk, not memory.
-    guard let export = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else {
-        throw CocoaError(.fileWriteUnknown)
+    let reader = try AVAssetReader(asset: asset)
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+        AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+        AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false,
+    ])
+    reader.add(output)
+    guard reader.startReading() else { throw reader.error ?? CocoaError(.fileReadUnknown) }
+    let file = try AVAudioFile(forWriting: url, settings: format.settings, commonFormat: .pcmFormatInt16, interleaved: true)
+    // The file is laid out on the movie's timeline: a track that starts late, a gap, or a buffer
+    // that can't be read becomes silence, so every transcript time matches the video.
+    var written: AVAudioFramePosition = 0
+    func writeSilence(_ count: AVAudioFramePosition) throws {
+        var left = count
+        while left > 0 {
+            let chunk = AVAudioFrameCount(min(left, 16_000))
+            guard let silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: chunk) else { throw CocoaError(.fileWriteOutOfSpace) }
+            silence.frameLength = chunk
+            memset(silence.int16ChannelData![0], 0, Int(chunk) * MemoryLayout<Int16>.size)
+            try file.write(from: silence)
+            left -= AVAudioFramePosition(chunk)
+        }
+        written += count
     }
-    try await export.export(to: url, as: .m4a)
+    while let sample = output.copyNextSampleBuffer() {
+        let frames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sample))
+        guard frames > 0 else { continue }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+        if pts.isNumeric {
+            let at = AVAudioFramePosition((pts.seconds * 16_000).rounded())
+            if at - written > 160 { try writeSilence(at - written) } // > 10 ms behind the timeline
+        }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { throw CocoaError(.fileWriteOutOfSpace) }
+        buffer.frameLength = frames
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList) == noErr else {
+            try writeSilence(AVAudioFramePosition(frames)) // unreadable buffer: keep the timeline
+            continue
+        }
+        try file.write(from: buffer)
+        written += AVAudioFramePosition(frames)
+    }
+    if reader.status == .failed { throw reader.error ?? CocoaError(.fileReadCorruptFile) }
     return url
 }
 

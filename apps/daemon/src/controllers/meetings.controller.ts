@@ -41,7 +41,23 @@ export function meetingsController(c: Container) {
     },
 
     transcribe: async (request: IdRequest, reply: FastifyReply) => {
-      return reply.code(202).send(await c.transcription.enqueue(request.params.id));
+      return reply.code(202).send(await c.transcription.enqueue(request.params.id, "transcript"));
+    },
+
+    summary: async (request: IdRequest, reply: FastifyReply) => {
+      const meeting = c.meetings.get(request.params.id);
+      if (meeting.summary !== "done") throw notFound("Summary");
+      return reply.header("cache-control", "no-store").type("application/json").sendFile("summary.json", c.repo.dir(meeting.id));
+    },
+
+    summaryMarkdown: async (request: IdRequest, reply: FastifyReply) => {
+      const meeting = c.meetings.get(request.params.id);
+      if (meeting.summary !== "done") throw notFound("Summary");
+      return reply.header("cache-control", "no-store").type("text/markdown; charset=utf-8").sendFile("summary.md", c.repo.dir(meeting.id));
+    },
+
+    summarize: async (request: IdRequest, reply: FastifyReply) => {
+      return reply.code(202).send(await c.transcription.enqueue(request.params.id, "summary"));
     },
 
     stop: async (request: IdRequest, reply: FastifyReply) => {

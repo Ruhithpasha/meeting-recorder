@@ -224,7 +224,8 @@ describe("settings API", () => {
 
   it.each([
     [{ quality: "8k" }],
-    [{ transcription: { enabled: true, model: "huge" } }],
+    [{ transcription: { enabled: true, summarize: "yes" } }],
+    [{ transcription: { enabled: true, summarize: true, model: "base" } }],
     [{ extraApps: ["rm -rf /"] }],
     [{ surprise: true }],
   ])("PUT rejects %j", async (patch) => {
@@ -309,5 +310,48 @@ describe("reveal in Finder", () => {
     expect(res.statusCode).toBe(204);
     expect(revealed).toEqual([join(dirs.meetingsDir, id, "recording.mp4")]);
     expect((await app.inject({ method: "POST", url: "/api/meetings/2020-01-01_00-00-00_none/reveal", headers: AUTH })).statusCode).toBe(404);
+  });
+});
+
+describe("summary API", () => {
+  it("GET summary: 404 until done, then the JSON; POST summarize needs a transcript", async () => {
+    const { app, id, container, dirs } = await withMeeting();
+    expect((await app.inject({ url: `/api/meetings/${id}/summary`, headers: AUTH })).statusCode).toBe(404);
+    const res = await app.inject({ method: "POST", url: `/api/meetings/${id}/summarize`, headers: AUTH });
+    expect(res.statusCode).toBe(409);
+    writeFileSync(join(dirs.meetingsDir, id, "summary.json"), JSON.stringify({ version: 1, overview: "Sync.", keyPoints: [], decisions: [], actionItems: [] }));
+    await container.repo.save({ ...container.repo.get(id)!, transcript: "done", summary: "done" });
+    const got = await app.inject({ url: `/api/meetings/${id}/summary`, headers: AUTH });
+    expect(got.statusCode).toBe(200);
+    expect(got.json().overview).toBe("Sync.");
+  });
+});
+
+describe("settings migration", () => {
+  it("an older settings.json with the whisper model field loads (field dropped, choices kept)", async () => {
+    const { tempDirs } = await import("./helpers/harness.ts");
+    const dirs = tempDirs();
+    writeFileSync(join(dirs.stateDir, "settings.json"), JSON.stringify({ autoRecord: false, quality: "1080p15", transcription: { enabled: true, model: "base" }, extraApps: [] }));
+    const { SettingsRepository } = await import("../src/repositories/SettingsRepository.ts");
+    const repo = new SettingsRepository(join(dirs.stateDir, "settings.json"));
+    expect(await repo.load()).toEqual({ autoRecord: false, quality: "1080p15", transcription: { enabled: true, summarize: true, language: "auto" }, extraApps: [] });
+  });
+});
+
+describe("jobs info and summary.md", () => {
+  it("GET /api/jobs reports availability and languages (empty without a transcriber)", async () => {
+    const { app } = await makeApp();
+    const res = await app.inject({ url: "/api/jobs", headers: AUTH });
+    expect(res.json()).toEqual({ transcriptUnavailable: "Transcription isn't installed.", summaryUnavailable: expect.stringMatching(/isn't installed/), languages: [] });
+  });
+
+  it("GET summary.md serves the saved Markdown (one source for Copy)", async () => {
+    const { app, id, container, dirs } = await withMeeting();
+    writeFileSync(join(dirs.meetingsDir, id, "summary.md"), "# Sync\n\nDone.\n");
+    await container.repo.save({ ...container.repo.get(id)!, transcript: "done", summary: "done" });
+    const res = await app.inject({ url: `/api/meetings/${id}/summary.md`, headers: AUTH });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/markdown");
+    expect(res.body).toBe("# Sync\n\nDone.\n");
   });
 });

@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Meeting } from "@meeting-recorder/shared";
-import { dayLabel, formatDuration, formatTime } from "../../components/format.ts";
-import { Badge, Button, EmptyState, ErrorState, Spinner } from "../../components/ui.tsx";
-import type { MeetingsState } from "../../hooks/meetingsReducer.ts";
+import { Search } from "lucide-react";
+import { cn } from "cn";
+import { dayLabel, formatDuration, formatTime } from "@/components/format.ts";
+import { EmptyState, ErrorState, Spinner } from "@/components/ui.tsx";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import type { MeetingsState } from "@/hooks/meetingsReducer.ts";
 
 interface Props {
   state: MeetingsState;
@@ -50,26 +55,29 @@ export function MeetingList({ state, selectedId, onSelect, onRetry, onLoadMore }
     );
   }
   return (
-    <div className="meeting-list-panel" role="region" aria-label="Meetings">
-      <input className="search" type="search" placeholder="Search meetings" aria-label="Search meetings"
-        value={query} onChange={(e) => setQuery(e.target.value)} />
+    <div role="region" aria-label="Meetings">
+      <div className="relative mb-1.5 mt-0.5">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <Input type="search" placeholder="Search meetings" aria-label="Search meetings" className="bg-card pl-8"
+          value={query} onChange={(e) => setQuery(e.target.value)} />
+      </div>
       {groups.length === 0 && (
-        <p className="muted state-inline">
+        <p className="px-1.5 py-2.5 text-sm text-muted-foreground">
           No {state.nextCursor ? "loaded " : ""}meetings match “{query}”.
           {state.nextCursor && " Search covers the meetings loaded so far: load older meetings to search further."}
         </p>
       )}
       {groups.map(([day, meetings]) => (
         <section key={day}>
-          <h2 className="day-label">{day}</h2>
-          <ul className="meeting-list" aria-label={day}>
+          <h2 className="mx-1.5 mb-1 mt-4 text-xs font-semibold text-muted-foreground">{day}</h2>
+          <ul className="grid gap-0.5" aria-label={day}>
             {meetings.map((m) => <MeetingRow key={m.id} meeting={m} selected={m.id === selectedId} onSelect={onSelect} />)}
           </ul>
         </section>
       ))}
-      {state.error && <p className="error-text" role="alert">{state.error}</p>}
+      {state.error && <p className="mt-2 text-sm text-destructive" role="alert">{state.error}</p>}
       {state.nextCursor && (
-        <Button className="load-more" disabled={state.loadingMore} onClick={onLoadMore}>
+        <Button variant="outline" className="mt-3 w-full" disabled={state.loadingMore} onClick={onLoadMore}>
           {state.loadingMore ? "Loading…" : "Load older meetings"}
         </Button>
       )}
@@ -80,18 +88,22 @@ export function MeetingList({ state, selectedId, onSelect, onRetry, onLoadMore }
 function MeetingRow({ meeting, selected, onSelect }: { meeting: Meeting; selected: boolean; onSelect: (id: string) => void }) {
   return (
     <li>
-      <button type="button" className={`meeting-row${selected ? " selected" : ""}`} aria-current={selected || undefined} onClick={() => onSelect(meeting.id)}>
-        <span className="app-dot" aria-hidden="true">{meeting.app.slice(0, 1).toUpperCase()}</span>
-        <span className="meeting-main">
-          <span className="meeting-title">{meeting.title}</span>
-          <span className="meeting-meta">
-            {formatTime(meeting.startedAt)} · {meeting.app}{meeting.durationSec !== null ? ` · ${formatDuration(meeting.durationSec)}` : ""}
-          </span>
+      <button type="button" aria-current={selected || undefined} onClick={() => onSelect(meeting.id)}
+        className={cn("grid w-full grid-cols-[1fr_auto] gap-x-2.5 gap-y-0.5 rounded-xl px-2.5 py-2 text-left transition-all duration-150",
+          "hover:bg-foreground/5 focus-visible:outline-2 focus-visible:outline-ring",
+          selected && "bg-card shadow-sm ring-1 ring-border hover:bg-card")}>
+        <span className="truncate font-semibold">{meeting.title}</span>
+        <span className="self-center text-sm tabular-nums text-muted-foreground">
+          {meeting.durationSec !== null ? formatDuration(meeting.durationSec) : ""}
         </span>
-        <span className="meeting-badges">
-          {meeting.status === "recording" && <Badge tone="live">Recording</Badge>}
-          {meeting.status === "recovered" && <Badge tone="warn">Recovered</Badge>}
-          {meeting.transcript === "done" && <Badge tone="neutral">Transcript</Badge>}
+        <span className="col-span-full flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+          <Badge variant="secondary" className="bg-accent text-accent-foreground">{meeting.app}</Badge>
+          <span className="tabular-nums">{formatTime(meeting.startedAt)}</span>
+          {meeting.status === "recording" && <Badge className="animate-pulse bg-live text-white">Recording</Badge>}
+          {meeting.status === "recovered" && <Badge className="bg-warn text-warn-foreground">Recovered</Badge>}
+          {meeting.summary === "done"
+            ? <Badge variant="outline">Summary</Badge>
+            : meeting.transcript === "done" && <Badge variant="outline">Transcript</Badge>}
         </span>
       </button>
     </li>

@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
 import type { Meeting, Status } from "@meeting-recorder/shared";
-import { api } from "../../api/client.ts";
-import { formatDuration } from "../../components/format.ts";
-import { Button } from "../../components/ui.tsx";
+import { Circle, Square } from "lucide-react";
+import { cn } from "cn";
+import { api } from "@/api/client.ts";
+import { formatDuration } from "@/components/format.ts";
+import { LiveWave } from "@/components/Waveform.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 
 const LABEL: Record<Status["state"], string> = {
   idle: "Not recording",
@@ -24,7 +28,9 @@ export function RecordingBanner({ status, meeting }: { status: Status | null; me
     return () => clearInterval(timer);
   }, [live]);
 
-  if (!status) return <div className="banner" aria-busy="true">Connecting to the recorder…</div>;
+  if (!status) {
+    return <div className="mb-5 rounded-2xl border bg-card px-4 py-3 text-sm text-muted-foreground" aria-busy="true">Connecting to the recorder…</div>;
+  }
 
   const act = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -39,29 +45,41 @@ export function RecordingBanner({ status, meeting }: { status: Status | null; me
   };
 
   const elapsed = meeting && live ? formatDuration(Math.max(0, (now - Date.parse(meeting.startedAt)) / 1000)) : null;
-  const label = LABEL[status.state];
 
   return (
-    <section className={`banner${live ? " banner-live" : ""}`} aria-label="Recorder status">
-      <div className="banner-state" role="status" aria-live="polite">
-        {live && <span className="rec-dot" aria-hidden="true" />}
-        <strong>{label}</strong>
-        {live && meeting && <span className="muted"> · {meeting.app}</span>}
-        {elapsed && <span className="banner-timer">{elapsed}</span>}
-        {status.state === "idle" && status.agentConnected && <span className="muted"> · meetings are detected automatically</span>}
-        {!status.agentConnected && <span className="muted"> · menu-bar app not connected</span>}
+    <section aria-label="Recorder status"
+      className={cn("mb-5 flex flex-wrap items-center gap-x-4 gap-y-3 rounded-2xl border bg-card px-4 py-3 shadow-sm transition-colors duration-300",
+        live && "border-live/40 bg-live-soft")}>
+      <div className="flex min-w-56 flex-1 items-center gap-3" role="status" aria-live="polite">
+        <LiveWave live={live} />
+        <div className="grid leading-tight">
+          <span className="font-semibold">{LABEL[status.state]}{live && meeting ? `: ${meeting.app}` : ""}</span>
+          <span className="text-sm text-muted-foreground">
+            {status.state === "idle" && status.agentConnected && "Zoom, Teams and Meet calls are recorded automatically"}
+            {live && "Your screen and both sides of the audio"}
+            {status.state === "stopping" && "Finishing the file"}
+            {!status.agentConnected && "Meeting Recorder isn't connected"}
+          </span>
+        </div>
+        {elapsed && (
+          <span className="font-heading text-xl font-semibold tabular-nums text-live animate-in fade-in" aria-label={`Recording for ${elapsed}`}>{elapsed}</span>
+        )}
       </div>
       {status.state === "idle" && (
-        <Button variant="primary" disabled={busy || !status.agentConnected} onClick={() => act(api.startRecording)}>
-          Start recording
+        <Button disabled={busy || !status.agentConnected} onClick={() => act(api.startRecording)}>
+          <Circle className="fill-current" />Start recording
         </Button>
       )}
       {status.state === "recording" && status.meetingId && (
-        <Button variant="danger" disabled={busy} onClick={() => act(() => api.stopRecording(status.meetingId!))}>
-          Stop
+        <Button className="bg-live text-white hover:bg-live/85" disabled={busy} onClick={() => act(() => api.stopRecording(status.meetingId!))}>
+          <Square className="fill-current" />Stop
         </Button>
       )}
-      {(status.warning || error) && <p className="banner-warning" role="alert">{error ?? status.warning}</p>}
+      {(status.warning || error) && (
+        <Alert className="basis-full border-0 bg-warn text-warn-foreground" role="alert">
+          <AlertDescription className="text-warn-foreground">{error ?? status.warning}</AlertDescription>
+        </Alert>
+      )}
     </section>
   );
 }

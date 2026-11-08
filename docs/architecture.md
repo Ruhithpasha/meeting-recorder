@@ -4,7 +4,7 @@
 login (LaunchAgent, KeepAlive)
   └── Meeting Recorder.app (Swift, menu bar)       capture (ScreenCaptureKit), mic detection, permissions
         └── node daemon (apps/daemon, Fastify)     state machine, detection rules, storage, recovery, API
-              └── dashboard (apps/web, React)       served on 127.0.0.1, opened in your browser on demand
+              └── dashboard (apps/web, React + Tailwind/shadcn) served on 127.0.0.1, shown in the app's own window
 ```
 
 The agent is the parent so macOS attributes Screen Recording / Microphone permission to "Meeting Recorder". They talk NDJSON over the daemon's stdin/stdout ([protocol.md](protocol.md)). The daemon exits when stdin closes, so it can never be orphaned.
@@ -81,13 +81,30 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 | `MeetingRecorderTranscriber` | Separate executable; see below. |
 | `AgentCore` | Pure logic (wire format, validator, capture math, transcript format), checked by `swift run AgentCoreChecks`. The Command Line Tools ship without XCTest. |
 
-## Transcription (`services/TranscriptionService.ts` + `MeetingRecorderTranscriber`)
+## Transcription and summaries (`services/TranscriptionService.ts` + `MeetingRecorderTranscriber`)
+
+Two kinds of job run one at a time, newest meeting first, under the same rules (idle, plugged in, watchdog, 3 retries, cancelled when a recording starts):
+
+1. **Transcribe:** described below.
+2. **Summarize:** `MeetingRecorderTranscriber --summarize <dir>`, run only after the transcript is done.
+   - Apple's on-device Foundation Models write a structured summary (overview, key points, decisions, action items).
+   - It uses `DynamicGenerationSchema`, because the `@Generable` macro needs full Xcode.
+   - The model's context is about 4k tokens, so long transcripts are summarized map-reduce style: notes per chunk, then a summary of the notes.
+   - Measured: a 12 s meeting transcribed and summarized in 8 s end to end; a 15.9k-character transcript summarized in 20 s (2 parts); about 20 MB of memory in our process.
+   - Exit code 3 (Apple Intelligence off) disables only summaries; transcripts keep running.
+   - Exit codes: 0 done · 3 unavailable (blocked 30 min, cleared by a settings change) · 5 model still downloading (queued, retried after 10 min) · 6 the model refused this transcript (failed at once, reason saved in `summaryError`) · anything else retries up to 3 times.
+   - Each meeting has its own `summary.json` / `summary.md`. Re-transcribing a meeting re-queues its summary, so it never describes an old transcript.
+   - Old outputs are kept until a new file replaces them (only a file written after the job started counts), so a failed redo never loses a good transcript or summary.
+   - "queued" is only set when the user asks (or for a retry), and it survives restarts even when the automatic setting is off.
+   - Very long meetings are reduced in rounds until the notes fit one window. If a round stops shrinking, the job fails with a clear reason rather than summarizing only part of the meeting.
 
 ```
 meeting finalized ─▶ queue (derived from meta.json: transcript none|queued; newest first)
     gates: enabled · recorder idle · on AC power · transcriber present · one job at a time
       └─▶ MeetingRecorderTranscriber recording.mp4 <dir>
-            per audio track (system = "Others", mic = "You"): AVAssetReader → SpeechAnalyzer + SpeechTranscriber
+            per audio track (system = "Others", mic = "You"): AVAssetReader → 16 kHz mono PCM → SpeechAnalyzer + SpeechTranscriber (--locale from Settings)
+            (PCM laid out on the movie timeline: late track starts, gaps and unreadable buffers become silence, so times match the video)
+            → TranscriptCleanup: drop mic echo of "Others" (overlapping ±1.5 s, an in-order run of ≥3 words and ≥60% of the line), merge same-speaker fragments (gap ≤1.2 s)
             → transcript.json + transcript.vtt (atomic writes) ; stdout {"percent":n}
     recording starts / unplugged ─▶ SIGTERM, requeue · exit 3 ─▶ unavailable (macOS < 26) · 3 failures ─▶ failed (Retry)
 ```

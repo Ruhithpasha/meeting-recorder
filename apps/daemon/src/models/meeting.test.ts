@@ -51,6 +51,6 @@ describe("parseMeeting", () => {
   });
   it("coerces bad optional fields instead of failing", () => {
     expect(parseMeeting({ ...good, durationSec: -5, sizeBytes: "big", transcript: "??" }, good.id))
-      .toMatchObject({ durationSec: null, sizeBytes: null, transcript: "none" });
+      .toMatchObject({ durationSec: null, sizeBytes: null, transcript: "none", summary: "none" });
   });
 });

@@ -24,6 +24,7 @@ mkdir -p "$tmp/Contents/MacOS" "$tmp/Contents/Resources"
 cp "$bin/MeetingRecorderAgent" "$tmp/Contents/MacOS/"
 if [ "$has_transcriber" = 1 ]; then cp "$bin/MeetingRecorderTranscriber" "$tmp/Contents/MacOS/"; fi
 cp "$src/native/macos/Resources/Info.plist" "$tmp/Contents/Info.plist"
+cp "$src/native/macos/Resources/AppIcon.icns" "$tmp/Contents/Resources/AppIcon.icns"
 
 sign_id="-"
 if security find-identity -v -p codesigning 2>/dev/null | grep -q "$identity"; then sign_id="$identity"; fi

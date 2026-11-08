@@ -1,5 +1,5 @@
 // Typed client for the daemon's API. Same origin, so the HttpOnly session cookie rides along.
-import type { Meeting, MeetingPage, Settings, Status, Transcript } from "@meeting-recorder/shared";
+import type { JobsInfo, Meeting, MeetingPage, MeetingSummary, Settings, Status, Transcript } from "@meeting-recorder/shared";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -38,6 +38,14 @@ export const api = {
   putSettings: (settings: Settings) => request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   mediaUrl: (id: string) => `/api/meetings/${encodeURIComponent(id)}/media`,
   getTranscript: (id: string) => request<Transcript>(`/api/meetings/${encodeURIComponent(id)}/transcript`),
+  getSummaryMarkdown: async (id: string) => {
+    const response = await fetch(`/api/meetings/${encodeURIComponent(id)}/summary.md`, { credentials: "same-origin" });
+    if (!response.ok) throw new ApiError(response.status, "Couldn't load the summary.");
+    return response.text();
+  },
+  jobs: () => request<JobsInfo>("/api/jobs"),
+  getSummary: (id: string) => request<MeetingSummary>(`/api/meetings/${encodeURIComponent(id)}/summary`),
+  summarize: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/summarize`, { method: "POST" }),
   reveal: (id: string) => request<void>(`/api/meetings/${encodeURIComponent(id)}/reveal`, { method: "POST" }),
   transcribe: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/transcribe`, { method: "POST" }),
 };

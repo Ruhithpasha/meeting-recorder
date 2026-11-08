@@ -21,6 +21,7 @@ export async function registerRoutes(app: FastifyInstance, c: Container, token: 
     schema: { body: { type: "object", additionalProperties: false, required: ["token"], properties: { token: { type: "string", maxLength: 256 } } } },
   }, system.session);
   app.get("/api/status", system.status);
+  app.get("/api/jobs", system.jobs);
   app.get("/api/events", system.events);
   app.get("/api/settings", system.getSettings);
   app.put("/api/settings", { schema: { body: SETTINGS_SCHEMA } }, system.putSettings);
@@ -44,5 +45,8 @@ export async function registerRoutes(app: FastifyInstance, c: Container, token: 
   app.get("/api/meetings/:id/transcript", { schema: { params: idParams } }, meetings.transcript);
   app.post("/api/meetings/:id/transcribe", { schema: { params: idParams } }, meetings.transcribe);
   app.post("/api/meetings/:id/reveal", { schema: { params: idParams } }, meetings.reveal);
+  app.get("/api/meetings/:id/summary", { schema: { params: idParams } }, meetings.summary);
+  app.get("/api/meetings/:id/summary.md", { schema: { params: idParams } }, meetings.summaryMarkdown);
+  app.post("/api/meetings/:id/summarize", { schema: { params: idParams } }, meetings.summarize);
   app.delete("/api/meetings/:id", { schema: { params: idParams } }, meetings.remove);
 }

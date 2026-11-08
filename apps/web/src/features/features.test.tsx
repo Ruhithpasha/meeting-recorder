@@ -67,7 +67,8 @@ describe("MeetingPlayer", () => {
   it("plays from the media endpoint (Range-capable) and shows details", () => {
     const { container } = render(<MeetingPlayer meeting={meeting(1)} onDeleted={vi.fn()} />);
     expect(container.querySelector("video")).toHaveAttribute("src", `/api/meetings/${meeting(1).id}/media`);
-    expect(screen.getByText(/30:00 · 300 MB/)).toBeInTheDocument();
+    expect(screen.getByText("30:00")).toBeInTheDocument();
+    expect(screen.getByText("300 MB")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Show in Finder" })).toBeInTheDocument();
   });
 
@@ -134,7 +135,7 @@ describe("RecordingBanner", () => {
 
   it("can't start when the menu-bar app isn't connected", () => {
     render(<RecordingBanner status={status({ agentConnected: false })} />);
-    expect(screen.getByText(/not connected/)).toBeInTheDocument();
+    expect(screen.getByText(/isn't connected/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start recording" })).toBeDisabled();
   });
 
@@ -150,15 +151,19 @@ describe("SettingsView", () => {
   it("loads, edits and saves settings", async () => {
     const calls = mockFetch({
       "GET /api/settings": () => json(DEFAULT_SETTINGS),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: ["en_IN", "hi_IN"] }),
       "PUT /api/settings": (init) => json(JSON.parse(String(init?.body))),
     });
     render(<SettingsView />);
     await userEvent.click(await screen.findByLabelText("Record meetings automatically"));
+    await screen.findByRole("option", { name: /Hindi/ });
+    await userEvent.selectOptions(screen.getByLabelText("Meeting language"), "hi_IN");
     await userEvent.selectOptions(screen.getByLabelText("Video quality"), "720p10");
     await userEvent.type(screen.getByLabelText(/Other apps/), "com.hnc.Discord");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved")).toBeInTheDocument();
-    expect(JSON.parse(calls.at(-1)!.body!)).toEqual({ ...DEFAULT_SETTINGS, autoRecord: false, quality: "720p10", extraApps: ["com.hnc.Discord"] });
+    expect(JSON.parse(calls.at(-1)!.body!)).toEqual({ ...DEFAULT_SETTINGS, autoRecord: false, quality: "720p10", extraApps: ["com.hnc.Discord"],
+      transcription: { ...DEFAULT_SETTINGS.transcription, language: "hi_IN" } });
   });
 
   it("rejects invalid bundle ids without calling the API", async () => {
@@ -180,10 +185,20 @@ describe("SettingsView", () => {
     expect(await screen.findByLabelText("Record meetings automatically")).toBeInTheDocument();
   });
 
-  it("disables the model picker when transcription is off", async () => {
-    mockFetch({ "GET /api/settings": () => json({ ...DEFAULT_SETTINGS, transcription: { enabled: false, model: "base" } }) });
+  it("the summary switch is disabled when transcription is off, and saves", async () => {
+    const calls = mockFetch({
+      "GET /api/settings": () => json({ ...DEFAULT_SETTINGS, transcription: { enabled: false, summarize: true, language: "auto" } }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: "Summaries need Apple Intelligence turned on.", languages: [] }),
+      "PUT /api/settings": (init) => json(JSON.parse(String(init?.body))),
+    });
     render(<SettingsView />);
-    expect(await screen.findByLabelText("Model")).toBeDisabled();
+    const summarize = await screen.findByLabelText(/Write a summary/);
+    expect(summarize).toBeDisabled();
+    await userEvent.click(screen.getByLabelText("Transcribe recordings"));
+    await userEvent.click(summarize);
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved");
+    expect(JSON.parse(calls.at(-1)!.body!).transcription).toEqual({ enabled: true, summarize: false, language: "auto" });
   });
 });
 
@@ -257,7 +272,7 @@ describe("dashboard improvements", () => {
   it("the banner shows the live meeting's app and a running timer", () => {
     const started = new Date(Date.now() - 125_000).toISOString();
     render(<RecordingBanner status={status({ state: "recording", meetingId: meeting(1).id })} meeting={meeting(1, { app: "Google Meet", startedAt: started, status: "recording" })} />);
-    expect(screen.getByRole("status")).toHaveTextContent(/Google Meet/);
+    expect(screen.getByRole("status")).toHaveTextContent(/Recording: Google Meet/);
     expect(screen.getByRole("status")).toHaveTextContent(/2:0\d/);
   });
 
@@ -274,5 +289,76 @@ describe("review fixes", () => {
     render(<MeetingList {...listProps({ phase: "ready", items: [meeting(1)], nextCursor: "x" })} />);
     await userEvent.type(screen.getByLabelText("Search meetings"), "budget");
     expect(screen.getByText(/load older meetings to search further/)).toBeInTheDocument();
+  });
+});
+
+describe("SummaryPanel (via MeetingPlayer)", () => {
+  const summary = { version: 1, overview: "Budget review.", keyPoints: ["Spend 12% over"], decisions: ["Use an agency"], actionItems: ["Priya: send JDs"] };
+
+  it("shows overview and sections; Copy puts Markdown on the clipboard", async () => {
+    mockFetch({
+      [`GET /api/meetings/${meeting(1).id}/summary`]: () => json(summary),
+      [`GET /api/meetings/${meeting(1).id}/summary.md`]: () => new Response("# Meeting 1\n\n## Decisions\n\n- Use an agency\n"),
+      [`GET /api/meetings/${meeting(1).id}/transcript`]: () => json({ version: 1, language: "en", durationSec: 1, segments: [] }),
+    });
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+    render(<MeetingPlayer meeting={meeting(1, { transcript: "done", summary: "done" })} onDeleted={vi.fn()} />);
+    expect(await screen.findByText("Budget review.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Action items" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Copy" }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("## Decisions\n\n- Use an agency"));
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+  });
+
+  it("hidden until there's a transcript; then offers Summarize now, running and Retry", async () => {
+    const calls = mockFetch({
+      [`POST /api/meetings/${meeting(1).id}/summarize`]: () => json(meeting(1), { status: 202 }),
+      [`GET /api/meetings/${meeting(1).id}/transcript`]: () => json({ version: 1, language: "en", durationSec: 1, segments: [] }),
+    });
+    const { rerender } = render(<MeetingPlayer meeting={meeting(1)} onDeleted={vi.fn()} />);
+    expect(screen.queryByText("Summary")).toBeNull();
+    rerender(<MeetingPlayer meeting={meeting(1, { transcript: "done" })} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Summarize now" }));
+    expect(calls.some((c) => c.path === `/api/meetings/${meeting(1).id}/summarize`)).toBe(true);
+    rerender(<MeetingPlayer meeting={meeting(1, { transcript: "done", summary: "running" })} onDeleted={vi.fn()} />);
+    expect(screen.getByText(/Writing a summary on this Mac/)).toBeInTheDocument();
+    rerender(<MeetingPlayer meeting={meeting(1, { transcript: "done", summary: "failed" })} onDeleted={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("shows why summaries are unavailable (e.g. Apple Intelligence off)", async () => {
+    mockFetch({
+      [`POST /api/meetings/${meeting(1).id}/summarize`]: () => json({ error: "Summaries need Apple Intelligence turned on." }, { status: 409 }),
+      [`GET /api/meetings/${meeting(1).id}/transcript`]: () => json({ version: 1, language: "en", durationSec: 1, segments: [] }),
+    });
+    render(<MeetingPlayer meeting={meeting(1, { transcript: "done" })} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Summarize now" }));
+    expect(await screen.findByText(/Apple Intelligence/)).toBeInTheDocument();
+  });
+});
+
+describe("v0.4 dashboard", () => {
+  it("shows the saved language even when the language list couldn't load", async () => {
+    mockFetch({
+      "GET /api/settings": () => json({ ...DEFAULT_SETTINGS, transcription: { ...DEFAULT_SETTINGS.transcription, language: "hi_IN" } }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [] }),
+    });
+    render(<SettingsView />);
+    expect(await screen.findByLabelText("Meeting language")).toHaveValue("hi_IN");
+  });
+
+  it("explains unavailable summaries in settings", async () => {
+    mockFetch({
+      "GET /api/settings": () => json(DEFAULT_SETTINGS),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: "Summaries need Apple Intelligence turned on.", languages: [] }),
+    });
+    render(<SettingsView />);
+    expect(await screen.findByText(/Apple Intelligence turned on/)).toBeInTheDocument();
+  });
+
+  it("shows the saved reason when a summary failed", () => {
+    render(<MeetingPlayer meeting={meeting(1, { transcript: "done", summary: "failed", summaryError: "Apple's on-device model declined to summarize this meeting." })} onDeleted={vi.fn()} />);
+    expect(screen.getByText(/declined to summarize/)).toBeInTheDocument();
   });
 });

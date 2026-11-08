@@ -127,6 +127,38 @@ try? transcript.write(to: txDir) // overwrite works (atomic replace)
 check(FileManager.default.fileExists(atPath: txDir.appendingPathComponent("transcript.vtt").path), "transcript.vtt written")
 try? FileManager.default.removeItem(at: txDir)
 
+// MARK: Summary
+let summaryModel = MeetingSummary(overview: "  Weekly sync. ", keyPoints: ["a", " ", "b"], decisions: [], actionItems: ["Priya: send deck"])
+check(summaryModel.overview == "Weekly sync." && summaryModel.keyPoints == ["a", "b"], "summary trims and drops empty items")
+let md = summaryModel.markdown(title: "Sync")
+check(md.hasPrefix("# Sync\n\nWeekly sync.") && md.contains("## Key points\n\n- a\n- b") && md.contains("## Action items") && !md.contains("## Decisions"), "summary markdown skips empty sections")
+check(TranscriptChunker.chunks(["a", "b", "c"], maxTokens: 100) == ["a\nb\nc"], "short transcript is one chunk")
+let long = (0..<10).map { "Speaker: \(String(repeating: "x", count: 30)) \($0)" }
+let parts = TranscriptChunker.chunks(long, maxTokens: 25)
+check(parts.count > 1 && parts.allSatisfy { TranscriptChunker.estimatedTokens($0) <= 25 } && parts.joined(separator: "\n") == long.joined(separator: "\n"), "chunks fit the token budget and keep every line, in order")
+check(TranscriptChunker.chunks([String(repeating: "y", count: 1000)], maxTokens: 100).allSatisfy { TranscriptChunker.estimatedTokens($0) <= 100 }, "a single huge line is cut to fit")
+check(TranscriptChunker.chunks([]) == [], "empty transcript has no chunks")
+check(TranscriptChunker.estimatedTokens("abcdefgh") == 2 && TranscriptChunker.estimatedTokens("会議の要約") == 5, "CJK counts about one token per character")
+let cjk = TranscriptChunker.chunks(Array(repeating: String(repeating: "会", count: 300), count: 20), maxTokens: 2000)
+check(cjk.count >= 3 && cjk.allSatisfy { TranscriptChunker.estimatedTokens($0) <= 2000 }, "CJK transcripts are split so each part fits the window")
+
+// MARK: Transcript cleanup
+typealias Seg = Transcript.Segment
+let echoed = [Seg(start: 10, end: 14, speaker: "Others", text: "We should ship the release on Friday"),
+              Seg(start: 10.4, end: 14.3, speaker: "You", text: "we should ship the release on friday"),
+              Seg(start: 20, end: 22, speaker: "You", text: "Agreed, I'll write the notes")]
+let deEchoed = TranscriptCleanup.removeEcho(echoed)
+check(deEchoed.map(\.speaker) == ["Others", "You"] && deEchoed.last?.text == "Agreed, I'll write the notes", "echo of the other side on the mic is dropped, your own words kept")
+check(TranscriptCleanup.removeEcho([Seg(start: 10, end: 14, speaker: "Others", text: "ship it Friday"), Seg(start: 60, end: 64, speaker: "You", text: "ship it Friday")]).count == 2, "the same words much later are not an echo")
+check(TranscriptCleanup.removeEcho([Seg(start: 1, end: 2, speaker: "You", text: "hello")]).count == 1, "no Others track: nothing removed")
+let longOthers = Seg(start: 0, end: 30, speaker: "Others", text: "we think we can probably do the migration but that depends on what the team can do this week")
+check(TranscriptCleanup.removeEcho([longOthers, Seg(start: 12, end: 13, speaker: "You", text: "yes we can do that")]).count == 2, "a real reply sharing common words with a long Others line is kept")
+check(TranscriptCleanup.removeEcho([longOthers, Seg(start: 12, end: 13, speaker: "You", text: "I")]).count == 2, "a one-word reply is never treated as echo")
+check(TranscriptCleanup.removeEcho([longOthers, Seg(start: 20, end: 24, speaker: "You", text: "depends on what the team can do")]).count == 1, "an in-order run of their words inside a long line is echo")
+let merged = TranscriptCleanup.merge([Seg(start: 0, end: 2, speaker: "Others", text: "So the plan"), Seg(start: 2.5, end: 4, speaker: "Others", text: "is to ship."),
+                                      Seg(start: 4.2, end: 5, speaker: "You", text: "Great."), Seg(start: 9, end: 10, speaker: "You", text: "Next.")])
+check(merged.map(\.text) == ["So the plan is to ship.", "Great.", "Next."] && merged[0].end == 4, "fragments merge on short pauses, not across speakers or long pauses")
+
 // MARK: AgentConfig
 let home = FileManager.default.temporaryDirectory.appendingPathComponent("mr-checks-\(UUID().uuidString)").path
 try? FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true)

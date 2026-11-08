@@ -1,5 +1,6 @@
 // Composition root: builds repositories and services and wires them together (dependency injection
 // by hand; no framework). Tests call this with temp folders and a fake agent.
+import { execFile } from "node:child_process";
 import { join } from "node:path";
 import trash from "trash";
 import type { AgentPort } from "./agent/AgentChannel.ts";
@@ -61,6 +62,21 @@ export async function createContainer(o: ContainerOptions) {
   });
   settings.onChange = () => transcription.settingsChanged();
   await transcription.init();
+
+  /** Languages the on-device transcriber supports (asked once, then cached). */
+  let languages: Promise<string[]> | null = null;
+  // Cached only when it worked: a slow first call (speech service still starting) is retried next time.
+  const listLanguages = () => (languages ??= o.transcriberPath
+    ? new Promise<string[]>((resolve) => {
+        execFile(o.transcriberPath!, ["--list-locales"], { timeout: 15_000 }, (error, stdout) => {
+          let list: string[] = [];
+          try { if (!error) list = (JSON.parse(stdout) as string[]).filter((l) => /^[a-z]{2,3}(_[A-Z]{2})?$/.test(l)); }
+          catch { /* treated as a failed call */ }
+          if (!list.length) languages = null;
+          resolve(list);
+        });
+      })
+    : Promise.resolve([]));
   const onAgentEvent = createAgentEventHandler({
     agent: o.agent, recording, detection, recovery, status, bus, log: o.log,
     dashboardUrl: o.dashboardUrl, openFolder: o.openFolder,
@@ -70,6 +86,7 @@ export async function createContainer(o: ContainerOptions) {
   return {
     bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, onAgentEvent,
     reveal: o.reveal ?? (() => {}),
+    listLanguages,
     start() {
       repo.startWatching();
       disk.start(recording, status);

@@ -1,17 +1,25 @@
-// Background job: transcribe finished meetings on this Mac, one at a time, newest first.
+// Background jobs on finished meetings, on this Mac, one at a time, newest first:
+//   1. transcribe (SpeechTranscriber)  ─▶ transcript.json      meeting.transcript
+//   2. summarize  (Foundation Models)  ─▶ summary.json/.md     meeting.summary (after 1)
 //
-//   pending set (built once at boot, kept in sync from meeting events: no scans on the hot path)
-//      │
-//   pump() ──▶ gates: enabled · transcriber present · recorder idle · on AC power · nothing running
-//      └─▶ newest pending meeting ─▶ spawn MeetingRecorderTranscriber (stderr discarded, watchdog)
-//             exit 0 + transcript.json ─▶ "done"     exit 3 ─▶ unavailable (macOS < 26 / language)
-//             anything else ─▶ retry (max 3) ─▶ "failed" (manual Retry resets)
+//   pending: meeting id ─▶ next job kind (built once at boot, kept in sync from meeting events)
+//   pump() ──▶ gates: recorder idle · on AC power · nothing running · kind allowed and available
+//      └─▶ newest pending meeting ─▶ spawn MeetingRecorderTranscriber [--summarize] (watchdog)
 //
-// Cancelled (and requeued) when a recording starts, the Mac is unplugged, transcription is turned
-// off, or the meeting is deleted. "running" left by a crash is reset to "queued" at boot, so a
-// daemon restart loses nothing. No audio ever leaves the Mac.
+//   transcriber exit code ─▶ outcome
+//     0 + new output   done (a redone transcript re-queues the meeting's summary, if it had one)
+//     3                unavailable on this Mac (OS, language, Apple Intelligence off); re-checked
+//                      after 30 min or when settings change
+//     5                not ready yet (model downloading): queued again, retried in 10 min
+//     6                impossible for this input (model declined): failed now, reason shown
+//     other            retried up to 3 times, then failed (manual Retry resets)
+//
+// Automatic jobs follow the settings; jobs the user asks for ("Transcribe/Summarize now",
+// Retry) run even when the automatic setting is off. Cancelled (requeued) when a recording
+// starts, the Mac is unplugged or the meeting is deleted. "running" left by a crash is reset
+// at boot, so nothing is lost. No audio or text ever leaves the Mac.
 import { spawn, type ChildProcess } from "node:child_process";
-import { access } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Meeting, Settings, TranscriptStatus } from "@meeting-recorder/shared";
@@ -21,11 +29,13 @@ import type { EventBus } from "./EventBus.ts";
 import type { RecordingService } from "./RecordingService.ts";
 
 export const MAX_ATTEMPTS = 3;
-const EXIT_UNAVAILABLE = 3;
-/** Watchdog: twice the recording's length plus 10 minutes (transcription runs far faster). */
+export const UNAVAILABLE_RECHECK_MS = 30 * 60_000;
+export const NOT_READY_RETRY_MS = 10 * 60_000;
+/** Watchdog: twice the recording's length plus 10 minutes (both jobs run far faster). */
 export const timeoutMs = (durationSec: number | null) => ((durationSec ?? 3600) * 2 + 600) * 1000;
 
 export type Spawner = (command: string, args: string[]) => ChildProcess;
+export type JobKind = "transcript" | "summary";
 
 export interface TranscriptionDeps {
   repo: MeetingRepository;
@@ -36,29 +46,50 @@ export interface TranscriptionDeps {
   /** Path of MeetingRecorderTranscriber (inside the app bundle); null when not installed. */
   transcriberPath: string | null;
   spawner?: Spawner;
+  now?: () => number;
 }
 
-type Job = { id: string; child: ChildProcess | null; cancelled: boolean; timedOut: boolean };
+type Job = { id: string; kind: JobKind; child: ChildProcess | null; cancelled: boolean; timedOut: boolean; startedAt: number };
+type Block = { reason: string; until: number };
 
-const eligible = (m: Meeting) =>
-  (m.status === "complete" || m.status === "recovered") && (m.transcript === "none" || m.transcript === "queued");
+/** The file whose (re)write marks a finished job. */
+const OUTPUT: Record<JobKind, string> = { transcript: "transcript.json", summary: "summary.json" };
+const ERROR_FIELD = { transcript: "transcriptError", summary: "summaryError" } as const;
+const saved = (m: Meeting) => m.status === "complete" || m.status === "recovered";
+const waiting = (s: TranscriptStatus) => s === "none" || s === "queued";
+const JOB_KINDS = ["transcript", "summary"] as const;
+
+/** The next job a meeting needs, if any. */
+const nextKind = (m: Meeting): JobKind | null =>
+  !saved(m) ? null : waiting(m.transcript) ? "transcript" : m.transcript === "done" && waiting(m.summary) ? "summary" : null;
 
 export class TranscriptionService {
   private power: "ac" | "battery" | "unknown" = "unknown";
   /** Reserved synchronously in pump() (before any await), so two triggers can't start two jobs. */
   private running: Job | null = null;
-  private readonly pending = new Set<string>();
+  private readonly pending = new Map<string, JobKind>();
+  /** `${kind}:${id}` the user asked for explicitly: they run even if the automatic setting is off. */
+  private readonly manual = new Set<string>();
   private readonly failures = new Map<string, number>();
-  private unavailableReason: string | null = null;
+  private readonly blocked: Partial<Record<JobKind, Block>> = {};
+  private retryTimer: NodeJS.Timeout | null = null;
+  private retryAt = 0;
   private readonly unsubscribe: () => void;
   private readonly d: TranscriptionDeps;
+  private readonly now: () => number;
 
   constructor(deps: TranscriptionDeps) {
     this.d = deps;
-    if (!deps.transcriberPath) this.unavailableReason = "Transcription isn't installed.";
+    this.now = deps.now ?? Date.now;
+    if (!deps.transcriberPath) {
+      const forever = Number.POSITIVE_INFINITY;
+      this.blocked.transcript = { reason: "Transcription isn't installed.", until: forever };
+      this.blocked.summary = { reason: "Summaries need transcription, which isn't installed.", until: forever };
+    }
     this.unsubscribe = deps.bus.subscribe((event) => {
       if (event.type === "meeting") {
-        if (eligible(event.meeting)) this.pending.add(event.meeting.id);
+        const kind = nextKind(event.meeting);
+        if (kind) this.pending.set(event.meeting.id, kind);
         else this.pending.delete(event.meeting.id);
       } else if (event.type === "meetingDeleted") {
         this.pending.delete(event.id);
@@ -71,20 +102,33 @@ export class TranscriptionService {
     });
   }
 
-  /** Boot: reset jobs interrupted by a crash or update, and build the pending set (one scan). */
+  /** Boot: reset jobs interrupted by a crash or update, and build the pending map (one scan). */
   async init(): Promise<void> {
     for (let cursor: string | undefined; ;) {
       const page = this.d.repo.list(cursor, 500);
       for (const m of page.items) {
-        if (m.transcript === "running") await this.setTranscript(m, "queued");
-        else if (eligible(m)) this.pending.add(m.id);
+        let meeting = m;
+        if (meeting.transcript === "running") meeting = await this.setStatus(meeting, "transcript", "queued");
+        if (meeting.summary === "running") meeting = await this.setStatus(meeting, "summary", "queued");
+        // Automatic jobs wait at "none"; "queued" means the user asked (or a retry is due), so it
+        // must still run after a restart even if its automatic setting is off.
+        if (meeting.transcript === "queued") this.manual.add(`transcript:${meeting.id}`);
+        if (meeting.summary === "queued") this.manual.add(`summary:${meeting.id}`);
+        const kind = nextKind(meeting);
+        if (kind) this.pending.set(meeting.id, kind);
       }
       if (!page.nextCursor) break;
       cursor = page.nextCursor;
     }
   }
 
-  get unavailable(): string | null { return this.unavailableReason; }
+  /** Why a kind of job can't run on this Mac right now (null when it can). */
+  unavailableFor(kind: JobKind): string | null {
+    const block = this.blocked[kind];
+    return block && block.until > this.now() ? block.reason : null;
+  }
+
+  get unavailable(): string | null { return this.unavailableFor("transcript"); }
 
   setPower(state: "ac" | "battery"): void {
     this.power = state;
@@ -92,52 +136,84 @@ export class TranscriptionService {
     else this.pump();
   }
 
-  /** Settings changed: stop a running job when transcription was turned off, else maybe start. */
+  /** Settings changed: stop a job its setting turned off; re-check unavailable kinds (the user
+   *  may have just turned Apple Intelligence on); maybe start a job. */
   settingsChanged(): void {
-    if (!this.d.settings().transcription.enabled) this.cancelRunning();
+    for (const kind of JOB_KINDS) {
+      const block = this.blocked[kind];
+      if (block && Number.isFinite(block.until)) delete this.blocked[kind];
+    }
+    if (this.running && !this.manual.has(`${this.running.kind}:${this.running.id}`) && !this.autoAllowed(this.running.kind)) this.cancelRunning();
     else this.pump();
   }
 
-  /** Manual (re)queue from the dashboard. */
-  async enqueue(id: string): Promise<Meeting> {
+  /** "Transcribe now" / "Summarize now" / Retry from the dashboard. */
+  async enqueue(id: string, kind: JobKind = "transcript"): Promise<Meeting> {
     const meeting = this.d.repo.get(id);
     if (!meeting) throw notFound("Meeting");
-    if (meeting.status !== "complete" && meeting.status !== "recovered") throw conflict("Only saved recordings can be transcribed.");
-    if (this.unavailableReason) throw conflict(this.unavailableReason);
-    this.failures.delete(id);
-    const queued = await this.setTranscript(meeting, "queued");
+    if (!saved(meeting)) throw conflict(`Only saved recordings can be ${kind === "summary" ? "summarized" : "transcribed"}.`);
+    if (kind === "summary" && meeting.transcript !== "done") throw conflict("A summary needs the transcript first.");
+    const unavailable = this.unavailableFor(kind);
+    if (unavailable) throw conflict(unavailable);
+    const key = `${kind}:${id}`;
+    this.failures.delete(key);
+    this.manual.add(key);
+    const queued = await this.setStatus(meeting, kind, "queued", null);
     this.pump();
     return queued;
   }
 
-  /** Starts the next job if every gate is open. Cheap: no disk scans. Safe to call at any time. */
+  /** Starts the next job if every gate is open. No disk scans. Safe to call at any time. */
   pump(): void {
-    if (this.running || this.unavailableReason || this.power !== "ac") return;
-    if (!this.d.settings().transcription.enabled || this.d.recording.stateName !== "idle") return;
+    if (this.running || this.power !== "ac" || this.d.recording.stateName !== "idle") return;
+    const runnable = (id: string, kind: JobKind) =>
+      !this.unavailableFor(kind) && (this.manual.has(`${kind}:${id}`) || this.autoAllowed(kind));
+    // Common idle case first: nothing is allowed at all, so don't even look at the queue.
+    if (!this.manual.size && !JOB_KINDS.some((k) => !this.unavailableFor(k) && this.autoAllowed(k))) return;
+
     const busy = this.d.recording.busyMeetingIds;
-    const id = [...this.pending].filter((p) => !busy.has(p)).sort().at(-1); // ids sort chronologically
-    if (!id) return;
-    const meeting = this.d.repo.get(id);
-    if (!meeting) { this.pending.delete(id); return this.pump(); }
-    const job: Job = { id: meeting.id, child: null, cancelled: false, timedOut: false };
+    let pick: { meeting: Meeting; kind: JobKind } | undefined;
+    for (const id of [...this.pending.keys()].sort().reverse()) { // ids sort chronologically: newest first
+      const kind = this.pending.get(id)!;
+      if (busy.has(id) || !runnable(id, kind)) continue;
+      const meeting = this.d.repo.get(id);
+      if (!meeting || nextKind(meeting) !== kind) { this.pending.delete(id); continue; }
+      pick = { meeting, kind };
+      break;
+    }
+    if (!pick) return;
+    const job: Job = { id: pick.meeting.id, kind: pick.kind, child: null, cancelled: false, timedOut: false, startedAt: 0 };
     this.running = job;
-    void this.run(meeting, job).catch((error: unknown) => {
+    void this.run(pick.meeting, job).catch((error: unknown) => {
       if (this.running === job) this.running = null;
-      this.d.log.warn({ error }, "transcription job crashed");
+      this.d.log.warn({ error }, "background job crashed");
     });
   }
 
   dispose(): void {
     this.unsubscribe();
     this.cancelRunning();
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+  }
+
+  private autoAllowed(kind: JobKind): boolean {
+    const t = this.d.settings().transcription;
+    return t.enabled && (kind === "transcript" || t.summarize);
   }
 
   private async run(meeting: Meeting, job: Job): Promise<void> {
     const dir = this.d.repo.dir(meeting.id);
-    await this.setTranscript(meeting, "running");
+    // The old output stays until a new one replaces it (written atomically), so a failed redo
+    // never loses a good transcript or summary. Only a file written after this point counts.
+    job.startedAt = Date.now(); // compared with file times, so the real clock
+    await this.setStatus(meeting, job.kind, "running", null);
+    const language = this.d.settings().transcription.language;
+    const args = job.kind === "transcript"
+      ? [this.d.repo.recordingPath(meeting.id), dir, ...(language === "auto" ? [] : ["--locale", language])]
+      : ["--summarize", dir];
     // stderr is discarded: an unread pipe fills up and would block the transcriber forever.
-    const spawner = this.d.spawner ?? ((cmd, args) => spawn(cmd, args, { stdio: ["ignore", "pipe", "ignore"] }));
-    const child = spawner(this.d.transcriberPath!, [this.d.repo.recordingPath(meeting.id), dir]);
+    const spawner = this.d.spawner ?? ((cmd, a) => spawn(cmd, a, { stdio: ["ignore", "pipe", "ignore"] }));
+    const child = spawner(this.d.transcriberPath!, args);
     job.child = child;
     if (job.cancelled) child.kill("SIGTERM"); // cancelled while we were getting ready
     const watchdog = setTimeout(() => { job.timedOut = true; child.kill("SIGKILL"); }, timeoutMs(meeting.durationSec));
@@ -157,25 +233,63 @@ export class TranscriptionService {
     });
     clearTimeout(watchdog);
     this.running = null;
-
-    const current = this.d.repo.get(meeting.id);
-    if (!current) return this.pump(); // deleted meanwhile
-    if (job.cancelled) {
-      await this.setTranscript(current, "queued");
-    } else if (code === 0 && (await this.exists(join(dir, "transcript.json")))) {
-      this.failures.delete(meeting.id);
-      await this.setTranscript(current, "done");
-      this.d.log.info({ id: meeting.id }, "transcribed");
-    } else if (code === EXIT_UNAVAILABLE) {
-      this.unavailableReason = lastError ?? "Transcription isn't available on this Mac.";
-      await this.setTranscript(current, "none");
-    } else {
-      const attempts = (this.failures.get(meeting.id) ?? 0) + 1;
-      this.failures.set(meeting.id, attempts);
-      await this.setTranscript(current, attempts >= MAX_ATTEMPTS ? "failed" : "queued");
-      this.d.log.warn({ id: meeting.id, code, attempts, timedOut: job.timedOut, error: lastError }, "transcription failed");
-    }
+    await this.finish(job, code, lastError);
     this.pump();
+  }
+
+  private async finish(job: Job, code: number | null, lastError: string | null): Promise<void> {
+    const current = this.d.repo.get(job.id);
+    if (!current) return; // deleted meanwhile
+    const key = `${job.kind}:${job.id}`;
+    const dir = this.d.repo.dir(job.id);
+
+    if (job.cancelled) {
+      await this.setStatus(current, job.kind, "queued");
+      return;
+    }
+    if (code === 0 && (await this.writtenSince(join(dir, OUTPUT[job.kind]), job.startedAt))) {
+      this.failures.delete(key);
+      this.manual.delete(key);
+      const done = await this.setStatus(current, job.kind, "done", null);
+      // A new transcript makes an old summary wrong. A meeting that had a summary gets a new one
+      // (even with automatic summaries off); otherwise it waits for the usual rules.
+      if (job.kind === "transcript" && done.summary !== "none") {
+        this.failures.delete(`summary:${job.id}`);
+        if (done.summary === "done") this.manual.add(`summary:${job.id}`);
+        await this.setStatus(done, "summary", done.summary === "done" ? "queued" : "none", null);
+      }
+      this.d.log.info({ id: job.id, kind: job.kind }, "job done");
+      return;
+    }
+    if (code === 3) {
+      this.blocked[job.kind] = { reason: lastError ?? "Not available on this Mac.", until: this.now() + UNAVAILABLE_RECHECK_MS };
+      this.manual.delete(key);
+      await this.setStatus(current, job.kind, "none", lastError);
+      this.scheduleRetry(UNAVAILABLE_RECHECK_MS); // re-check then, without waiting for another event
+      return;
+    }
+    if (code === 5) {
+      this.blocked[job.kind] = { reason: lastError ?? "Not ready yet.", until: this.now() + NOT_READY_RETRY_MS };
+      await this.setStatus(current, job.kind, "queued", lastError);
+      this.scheduleRetry(NOT_READY_RETRY_MS);
+      return;
+    }
+    const attempts = code === 6 ? MAX_ATTEMPTS : (this.failures.get(key) ?? 0) + 1;
+    this.failures.set(key, attempts);
+    const failed = attempts >= MAX_ATTEMPTS;
+    if (failed) this.manual.delete(key);
+    await this.setStatus(current, job.kind, failed ? "failed" : "queued", lastError ?? (job.timedOut ? "It took too long and was stopped." : null));
+    this.d.log.warn({ id: job.id, kind: job.kind, code, attempts, timedOut: job.timedOut, error: lastError }, "job failed");
+  }
+
+  /** One timer; the sooner of two requested retries wins. */
+  private scheduleRetry(ms: number): void {
+    const at = this.now() + ms;
+    if (this.retryTimer && this.retryAt <= at) return;
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+    this.retryAt = at;
+    this.retryTimer = setTimeout(() => { this.retryTimer = null; this.pump(); }, ms);
+    this.retryTimer.unref?.();
   }
 
   private cancelRunning(): void {
@@ -184,14 +298,16 @@ export class TranscriptionService {
     this.running.child?.kill("SIGTERM");
   }
 
-  private async setTranscript(meeting: Meeting, transcript: TranscriptStatus): Promise<Meeting> {
-    const next = { ...meeting, transcript };
+  /** Saves a job status (and optionally its error message) and tells the dashboard. */
+  private async setStatus(meeting: Meeting, kind: JobKind, status: TranscriptStatus, error?: string | null): Promise<Meeting> {
+    const next: Meeting = { ...meeting, [kind]: status };
+    if (error !== undefined) next[ERROR_FIELD[kind]] = error;
     await this.d.repo.save(next);
     this.d.bus.publish({ type: "meeting", meeting: next }); // also keeps `pending` in sync
     return next;
   }
 
-  private async exists(path: string): Promise<boolean> {
-    try { await access(path); return true; } catch { return false; }
+  private async writtenSince(path: string, since: number): Promise<boolean> {
+    try { return (await stat(path)).mtimeMs >= since - 1000; } catch { return false; } // 1 s: coarse file times
   }
 }

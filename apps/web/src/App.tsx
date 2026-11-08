@@ -1,14 +1,17 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { ServerEvent, Status } from "@meeting-recorder/shared";
-import { establishSession, type SessionResult } from "./api/session.ts";
-import { EmptyState, Spinner } from "./components/ui.tsx";
-import { MeetingList } from "./features/meetings/MeetingList.tsx";
-import { MeetingPlayer } from "./features/meetings/MeetingPlayer.tsx";
-import { RecordingBanner } from "./features/status/RecordingBanner.tsx";
-import { useMeetings } from "./hooks/useMeetings.ts";
-import { useServerEvents } from "./hooks/useServerEvents.ts";
+import { establishSession, type SessionResult } from "@/api/session.ts";
+import { EmptyState, Spinner } from "@/components/ui.tsx";
+import { BrandMark } from "@/components/Waveform.tsx";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { MeetingList } from "@/features/meetings/MeetingList.tsx";
+import { MeetingPlayer } from "@/features/meetings/MeetingPlayer.tsx";
+import { RecordingBanner } from "@/features/status/RecordingBanner.tsx";
+import { useMeetings } from "@/hooks/useMeetings.ts";
+import { useServerEvents } from "@/hooks/useServerEvents.ts";
 
-const SettingsView = lazy(() => import("./features/settings/SettingsView.tsx"));
+const SettingsView = lazy(() => import("@/features/settings/SettingsView.tsx"));
 
 export function App() {
   const [session, setSession] = useState<SessionResult | "checking">("checking");
@@ -20,10 +23,10 @@ export function App() {
   if (session === "checking") return <Spinner label="Connecting" />;
   if (session !== "ok") {
     return (
-      <main className="shell">
-        <EmptyState title="Open the dashboard from the menu bar">
-          Click the Meeting Recorder icon in your menu bar and choose “Open Dashboard”. This page only works
-          from that link, so other websites can't read your recordings.
+      <main className="mx-auto max-w-3xl p-6">
+        <EmptyState title="Open the dashboard from Meeting Recorder">
+          Open Meeting Recorder from Spotlight or Finder, or choose Open Dashboard in its menu bar icon. This page only
+          works from there, so other websites can't read your recordings.
         </EmptyState>
       </main>
     );
@@ -63,9 +66,9 @@ function Dashboard() {
   // (All hooks above this line: the early return below must not change the hook order.)
   if (connection === "closed") {
     return (
-      <main className="shell">
+      <main className="mx-auto max-w-3xl p-6">
         <EmptyState title="This dashboard session has ended">
-          The recorder restarted. Click the Meeting Recorder icon in your menu bar and choose “Open Dashboard”.
+          Meeting Recorder restarted. Open it again from Spotlight or its menu bar icon.
         </EmptyState>
       </main>
     );
@@ -75,29 +78,41 @@ function Dashboard() {
   const liveMeeting = status?.meetingId ? meetings.items.find((m) => m.id === status.meetingId) ?? null : null;
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <h1><span className="logo" aria-hidden="true" />Meeting Recorder</h1>
-        <nav aria-label="Sections">
-          <button type="button" className={view === "meetings" ? "tab active" : "tab"} aria-current={view === "meetings" ? "page" : undefined} onClick={() => setView("meetings")}>Meetings</button>
-          <button type="button" className={view === "settings" ? "tab active" : "tab"} aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>Settings</button>
-        </nav>
-      </header>
-      {connection === "reconnecting" && <p className="note" role="status">Lost connection to the recorder. Reconnecting…</p>}
-      <RecordingBanner status={status} meeting={liveMeeting} />
-      <main>
-        {view === "meetings" ? (
-          <div className="columns">
-            <MeetingList state={meetings} selectedId={selectedId} onSelect={setSelectedId} onRetry={meetings.reload} onLoadMore={meetings.loadMore} />
+    // Tabs spans the whole window: the switch lives in the sidebar, its panels in the main column.
+    <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}
+      className="grid h-full grid-cols-1 gap-0 md:grid-cols-[minmax(290px,340px)_1fr]">
+      <aside className="flex min-h-0 flex-col border-b bg-sidebar text-sidebar-foreground md:border-b-0 md:border-r">
+        <header className="flex items-center justify-between gap-2 px-4 pb-2.5 pt-4">
+          <h1 className="flex items-center gap-2 whitespace-nowrap text-base font-bold"><BrandMark className="text-primary" />Meeting Recorder</h1>
+          <TabsList aria-label="Sections">
+            <TabsTrigger value="meetings">Meetings</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
+          </TabsList>
+        </header>
+        <div className="flex-1 overflow-y-auto px-2.5 pb-4">
+          <MeetingList state={meetings} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setView("meetings"); }}
+            onRetry={meetings.reload} onLoadMore={meetings.loadMore} />
+        </div>
+      </aside>
+      <main className="min-w-0 overflow-y-auto">
+        <div className="mx-auto max-w-4xl px-4 pb-10 pt-4 md:px-7">
+          {connection === "reconnecting" && (
+            <Alert className="mb-3 border-0 bg-warn" role="status">
+              <AlertDescription className="text-warn-foreground">Lost connection to Meeting Recorder. Reconnecting…</AlertDescription>
+            </Alert>
+          )}
+          <RecordingBanner status={status} meeting={liveMeeting} />
+          <TabsContent value="meetings">
             {/* key: fresh state per meeting, so a pending delete confirmation can't carry over */}
             <MeetingPlayer key={selected?.id ?? "none"} meeting={selected} onDeleted={() => setSelectedId(null)} />
-          </div>
-        ) : (
-          <Suspense fallback={<Spinner label="Loading settings" />}>
-            <SettingsView />
-          </Suspense>
-        )}
+          </TabsContent>
+          <TabsContent value="settings">
+            <Suspense fallback={<Spinner label="Loading settings" />}>
+              <SettingsView />
+            </Suspense>
+          </TabsContent>
+        </div>
       </main>
-    </div>
+    </Tabs>
   );
 }

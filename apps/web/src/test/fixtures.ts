@@ -11,6 +11,7 @@ export const meeting = (n: number, extra: Partial<Meeting> = {}): Meeting => ({
   sizeBytes: 300 * 1024 * 1024,
   status: "complete",
   transcript: "none",
+  summary: "none",
   ...extra,
 });
 

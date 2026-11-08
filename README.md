@@ -1,6 +1,6 @@
 # Meeting Recorder
 
-Free, open-source, **local-only** meeting recorder for macOS. It sits in your menu bar, notices when a Zoom, Teams, Google Meet, Webex, Slack huddle or FaceTime call starts, and records your screen plus **both sides of the audio** (your mic and everyone else) to `~/Meetings`. It can also transcribe each meeting on your Mac, labelling who spoke ("You" / "Others"). Nothing leaves your Mac: no account, no cloud, no telemetry.
+Free, open-source, **local-only** meeting recorder for macOS. It sits in your menu bar, notices when a Zoom, Teams, Google Meet, Webex, Slack huddle or FaceTime call starts, and records your screen plus **both sides of the audio** (your mic and everyone else) to `~/Meetings`. It can also transcribe each meeting and write a **summary** (key points, decisions, action items) on your Mac, labelling who spoke ("You" / "Others"). Nothing leaves your Mac: no account, no cloud, no telemetry.
 
 ## Install
 
@@ -19,6 +19,14 @@ The installer:
 5. Starts Meeting Recorder now and at every login.
 
 After installing, macOS asks for **Screen & System Audio Recording** and **Microphone** access for "Meeting Recorder". Allow both, then quit Meeting Recorder from the menu bar and reopen it once so the Screen Recording permission applies.
+
+### Updating
+
+```bash
+meeting-recorder update
+```
+
+This downloads the latest version and builds it next to your current one. It only switches over if everything succeeded, so a failed update leaves your current version running. It won't run while a meeting is being recorded. Your recordings, settings and permissions are kept. If the command isn't found, open a new Terminal window, or run `~/.meeting-recorder/bin/meeting-recorder update`.
 
 ### Commands
 
@@ -41,16 +49,32 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
   - Meetings are grouped by day and searchable.
   - Plays recordings with seeking; transcripts are clickable to jump to a moment.
   - Show in Finder, and delete to the Trash.
-  - Settings: quality (720p or 1080p, at 30 or 15 fps), auto-record, transcription, extra apps.
+  - Settings: quality (720p or 1080p, at 30 or 15 fps), auto-record, transcription, summaries, the meeting language, extra apps.
+  - Follows your Mac's light or dark appearance. A live waveform shows while recording; the menu-bar icon is the same waveform, red and moving while recording.
   - Closing the window doesn't stop recording. To stop Meeting Recorder completely, use "Quit Meeting Recorder" in the menu bar or the app menu.
 - **Files:** one folder per meeting, for example `~/Meetings/2026-11-08_14-30-05_zoom/`:
   - `recording.mp4`: H.264 video plus two AAC tracks (others, you). It plays in QuickTime.
   - `meta.json`: the meeting's details.
   - `transcript.json` and `transcript.vtt`: the transcript, once it exists.
+  - `summary.md` and `summary.json`: the summary, once it exists.
 
-### Transcription
+### Transcripts and summaries
 
-Transcription runs with Apple's on-device speech engine, **only** when you're not recording, your Mac is plugged in, and it's enabled in Settings. The audio never leaves your Mac. The first time, macOS downloads its speech model for your language. "You" and "Others" come from the two separate audio tracks, so labels are exact rather than guessed.
+After a meeting is saved, Meeting Recorder transcribes it with Apple's on-device speech engine. It then writes a **summary** (overview, key points, decisions, action items with owners) with Apple's on-device language model.
+
+- Both run **only** when you're not recording and your Mac is plugged in.
+- Nothing leaves your Mac.
+- The summary appears above the transcript in the dashboard, with a **Copy** button (Markdown), and is saved as `summary.md` next to the recording.
+- "You" and "Others" come from the two separate audio tracks, so the labels are exact rather than guessed.
+- Requirements: transcripts need macOS 26. Summaries also need **Apple Intelligence** turned on (System Settings → Apple Intelligence & Siri).
+- Long meetings are summarized in parts that are then combined, because the on-device model reads about 15 minutes of talk at a time.
+- **Every meeting gets its own summary**, saved in its own folder. Use **Summarize now** on a meeting to make one right away, or **Retry** if it failed (the reason is shown).
+- Transcription quality:
+  - Audio is extracted losslessly (16 kHz PCM) before recognition, and recordings use higher-bitrate audio (160 kbps for others, 96 kbps for you).
+  - Your voice leaking from the speakers into your mic is removed, so lines aren't duplicated under "You".
+  - Short fragments from the same speaker are merged into readable sentences.
+  - Pick the **meeting language** in Settings (for example English (India) or Hindi) if it differs from your Mac's language.
+- Turn either off in Settings.
 
 ## Recording consent
 
@@ -96,7 +120,7 @@ npm run gen:protocol     # after editing packages/shared/protocol.schema.json
 |---|---|
 | `packages/shared` | Protocol schema (single source of truth), generated TS/Swift types, API types |
 | `apps/daemon` | Fastify daemon: routes → controllers → services → repositories → models |
-| `apps/web` | React dashboard |
+| `apps/web` | React dashboard: Tailwind CSS + shadcn/ui components (`src/components/ui`), lucide icons |
 | `native/macos` | Swift menu-bar agent, on-device transcriber, AgentCore logic + checks |
 | `scripts` | Installer, `meeting-recorder` CLI, app build and signing |
 | `spike/` | The original capture proof |

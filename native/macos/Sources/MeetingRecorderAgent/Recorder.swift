@@ -239,8 +239,10 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
             ],
         ])
+        // Speech accuracy depends on the source: 160 kbps for everyone else (stereo), 96 kbps for your mic.
         func aac(_ channels: Int) -> [String: Any] {
-            [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: channels, AVEncoderBitRateKey: 64_000 * channels]
+            [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: channels,
+             AVEncoderBitRateKey: channels == 2 ? 160_000 : 96_000]
         }
         let inputs = [video, AVAssetWriterInput(mediaType: .audio, outputSettings: aac(2)), AVAssetWriterInput(mediaType: .audio, outputSettings: aac(1))]
         for input in inputs {

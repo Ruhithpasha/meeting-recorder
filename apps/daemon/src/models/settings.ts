@@ -12,8 +12,12 @@ export const SETTINGS_SCHEMA = {
     transcription: {
       type: "object",
       additionalProperties: false,
-      required: ["enabled", "model"],
-      properties: { enabled: { type: "boolean" }, model: { enum: ["tiny", "base", "small"] } },
+      required: ["enabled", "summarize", "language"],
+      properties: {
+        enabled: { type: "boolean" },
+        summarize: { type: "boolean" },
+        language: { type: "string", pattern: "^(auto|[a-z]{2,3}(_[A-Z]{2})?)$" },
+      },
     },
     extraApps: {
       type: "array",

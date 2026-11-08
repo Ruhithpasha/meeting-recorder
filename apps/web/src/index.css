@@ -1,0 +1,115 @@
+/* Tailwind entry and shadcn/ui theme tokens only. Components are styled with Tailwind classes. */
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* Follow macOS appearance (the dashboard runs inside the app's own window). */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme inline {
+  --font-sans: system-ui, -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-heading: ui-rounded, system-ui, sans-serif;
+  --color-live: var(--live);
+  --color-live-soft: var(--live-soft);
+  --color-warn: var(--warn);
+  --color-warn-foreground: var(--warn-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+
+  /* The signature motion: the live waveform in the recording banner. */
+  --animate-wave: wave 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) infinite alternate;
+  @keyframes wave {
+    0% { height: 18%; }
+    50% { height: 95%; }
+    100% { height: 45%; }
+  }
+}
+
+:root {
+  --radius: 0.75rem;
+  --background: #f5f7fa;
+  --foreground: #18202e;
+  --card: #ffffff;
+  --card-foreground: #18202e;
+  --popover: #ffffff;
+  --popover-foreground: #18202e;
+  --primary: #0f7b72;
+  --primary-foreground: #ffffff;
+  --secondary: #e9edf2;
+  --secondary-foreground: #18202e;
+  --muted: #eef1f5;
+  --muted-foreground: #5d6676;
+  --accent: #e2f1ef;
+  --accent-foreground: #0b5f58;
+  --destructive: #d13438;
+  --border: #e1e5ec;
+  --input: #d5dbe4;
+  --ring: #0f7b72;
+  --sidebar: #eef1f5;
+  --sidebar-foreground: #18202e;
+  --sidebar-border: #e1e5ec;
+  --live: #e5484d;
+  --live-soft: #fdecec;
+  --warn: #fff4e0;
+  --warn-foreground: #7a4b00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #121821;
+    --foreground: #e8ecf2;
+    --card: #19212c;
+    --card-foreground: #e8ecf2;
+    --popover: #19212c;
+    --popover-foreground: #e8ecf2;
+    --primary: #3fb8ab;
+    --primary-foreground: #0b1714;
+    --secondary: #222c39;
+    --secondary-foreground: #e8ecf2;
+    --muted: #1e2733;
+    --muted-foreground: #a1aab8;
+    --accent: #173634;
+    --accent-foreground: #8fe0d6;
+    --destructive: #ff6b6f;
+    --border: #283241;
+    --input: #323e4f;
+    --ring: #3fb8ab;
+    --sidebar: #151c26;
+    --sidebar-foreground: #e8ecf2;
+    --sidebar-border: #283241;
+    --live-soft: #3a1c1f;
+    --warn: #3a2a10;
+    --warn-foreground: #ffd590;
+  }
+}
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html, body, #root { @apply h-full; }
+  body { @apply bg-background text-foreground font-sans antialiased; }
+  h1, h2, h3, h4 { @apply font-heading tracking-tight; }
+}

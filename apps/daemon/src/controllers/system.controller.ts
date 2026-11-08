@@ -22,6 +22,12 @@ export function systemController(c: Container, token: string, sessions: SessionS
 
     status: async () => c.status.get(),
 
+    jobs: async () => ({
+      transcriptUnavailable: c.transcription.unavailableFor("transcript"),
+      summaryUnavailable: c.transcription.unavailableFor("summary"),
+      languages: await c.listLanguages(),
+    }),
+
     getSettings: async () => c.settings.get(),
 
     putSettings: async (request: FastifyRequest<{ Body: Settings }>) => c.settings.update(request.body),

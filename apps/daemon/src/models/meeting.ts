@@ -43,6 +43,9 @@ export function newMeeting(id: string, app: string, title: string, startedAt: Da
     sizeBytes: null,
     status: "recording",
     transcript: "none",
+    summary: "none",
+    transcriptError: null,
+    summaryError: null,
   };
 }
 
@@ -67,5 +70,9 @@ export function parseMeeting(raw: unknown, expectedId: string): Meeting | null {
     status: m.status as Meeting["status"],
     transcript: typeof m.transcript === "string" && transcripts.includes(m.transcript)
       ? (m.transcript as Meeting["transcript"]) : "none",
+    summary: typeof m.summary === "string" && transcripts.includes(m.summary)
+      ? (m.summary as Meeting["summary"]) : "none", // meetings saved before summaries existed
+    transcriptError: typeof m.transcriptError === "string" ? m.transcriptError.slice(0, 300) : null,
+    summaryError: typeof m.summaryError === "string" ? m.summaryError.slice(0, 300) : null,
   };
 }

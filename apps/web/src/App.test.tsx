@@ -18,7 +18,7 @@ describe("App", () => {
   it("without a session, tells the user to open the dashboard from the menu bar", async () => {
     mockFetch({ "GET /api/status": () => json({ error: "Unauthorized" }, { status: 401 }) });
     render(<App />);
-    expect(await screen.findByText("Open the dashboard from the menu bar")).toBeInTheDocument();
+    expect(await screen.findByText("Open the dashboard from Meeting Recorder")).toBeInTheDocument();
   });
 
   it("with a token link: strips it from the URL, loads meetings, and applies live events", async () => {
@@ -58,13 +58,13 @@ describe("App", () => {
     let page = { items: [meeting(1, { status: "recording" })], nextCursor: null };
     mockFetch({ "GET /api/status": () => json(status()), "GET /api/meetings": () => json(page) });
     render(<App />);
-    expect(await screen.findByText("Recording", { selector: ".badge" })).toBeInTheDocument();
+    expect(await screen.findByText("Recording", { selector: "[data-slot=badge]" })).toBeInTheDocument();
     const events = FakeEventSource.instances[0]!;
     act(() => events.onopen?.());
     page = { items: [meeting(1, { status: "complete" })], nextCursor: null };
     act(() => events.onerror?.());
     act(() => events.onopen?.());
-    await waitFor(() => expect(screen.queryByText("Recording", { selector: ".badge" })).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Recording", { selector: "[data-slot=badge]" })).toBeNull());
   });
 
   it("tells the user to reopen from the menu bar when the stream is closed for good (new token)", async () => {
@@ -100,10 +100,11 @@ describe("App", () => {
       "GET /api/status": () => json(status()),
       "GET /api/meetings": () => json({ items: [], nextCursor: null }),
       "GET /api/settings": () => json(DEFAULT_SETTINGS),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [] }),
     });
     render(<App />);
     await screen.findByText("No recordings yet");
-    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
     await waitFor(() => expect(screen.getByLabelText("Record meetings automatically")).toBeChecked());
   });
 });
