@@ -111,9 +111,17 @@ export default function SettingsView({ liveModels }: { liveModels?: Partial<Reco
       <Card>
         <CardHeader><CardTitle className="font-heading text-base">Recording</CardTitle></CardHeader>
         <CardContent className="grid gap-5">
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor="auto-record">Record meetings automatically</Label>
-            <Switch id="auto-record" checked={settings.autoRecord} onCheckedChange={(on) => update({ autoRecord: on })} />
+          <div className="grid gap-1">
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="auto-record">Record meetings automatically</Label>
+              <Switch id="auto-record" checked={settings.autoRecord} onCheckedChange={(on) => update({ autoRecord: on })} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {settings.autoRecord
+                ? "A detected Zoom, Teams or Meet call starts recording by itself."
+                : "When a call is detected, a small pill asks: press Record to start. Nothing records until you do."}{" "}
+              You can always start and stop from the top of this window, the menu bar (⌘R) or the pill.
+            </p>
           </div>
           <div className="grid gap-2">
             <Label htmlFor="quality">Video quality</Label>

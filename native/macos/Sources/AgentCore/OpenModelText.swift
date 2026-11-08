@@ -10,9 +10,21 @@ public enum OpenModelText {
         return String(code)
     }
 
-    /// Whisper output can carry tokens like "<|0.00|>" or "<|en|>": remove them and tidy spaces.
+    /// Subtitle credits Whisper learned from subtitled videos and inserts over noise or silence.
+    /// Removed as exact phrases only (a real "thank you" in a meeting is kept).
+    static let subtitleArtifacts = [
+        // Credits run to the end of the line ("Subtitles by the Amara.org community"): removed through it.
+        #"Продолжение следует\.*"#, #"Субтитры (сделал|создавал).*$"#, #"Редактор субтитров.*$"#,
+        #"(?i)thanks? (you )?for watching[.!]*"#, #"(?i)please subscribe.*$"#, #"(?i)subtitles by.*$"#,
+        #"(?i)\S*amara\.org.*$"#, #"字幕(由|by).*$"#, #"(?i)untertitel (im auftrag|von).*$"#,
+    ]
+
+    /// Whisper output can carry tokens like "<|0.00|>" or "<|en|>" and subtitle credits: remove
+    /// them and tidy spaces.
     public static func cleanWhisper(_ text: String) -> String {
-        text.replacingOccurrences(of: #"<\|[^|>]*\|>"#, with: " ", options: .regularExpression)
+        var text = text
+        for pattern in subtitleArtifacts { text = text.replacingOccurrences(of: pattern, with: " ", options: .regularExpression) }
+        return text.replacingOccurrences(of: #"<\|[^|>]*\|>"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }

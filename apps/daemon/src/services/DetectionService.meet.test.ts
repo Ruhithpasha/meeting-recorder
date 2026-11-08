@@ -7,7 +7,7 @@ describe("Google Meet in Chrome (window title + our own app on the mic)", () => 
   afterEach(() => vi.useRealTimers());
 
   it("a writer failure mid-call continues in a new recording", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     const meet = { type: "mic" as const, users: [{ bundleId: "com.google.Chrome.helper", pid: 1 }], windows: [{ bundleId: "com.google.Chrome", pid: 1, title: "Meet – zqk-gbtr-bpc" }] };
     await c.onAgentEvent(meet);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS);

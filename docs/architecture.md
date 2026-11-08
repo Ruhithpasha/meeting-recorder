@@ -51,6 +51,8 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 
 ## Meeting detection (`services/DetectionService.ts`, `detection-rules.json`)
 
+Ask mode is the default (`autoRecord: false`): a match held 3 s sends the agent `{cmd:"suggest", label}`, which shows a "Google Meet detected · Record" pill; the Record button sends tray `record`, which starts the suggested meeting like an automatic one (so it also stops when the meeting ends). The prompt is hidden when the meeting ends or a recording starts. With `autoRecord: true` detection starts recording directly, as before.
+
 - Native apps (Zoom, Teams, Webex, Slack, FaceTime): the app using the mic is enough.
 - Browsers: their mic helper process **and** a window whose title matches a meeting pattern (e.g. `Meet - `), so dictation or voice chat in a browser doesn't start a recording.
 - Hysteresis: start after the match holds 3 s; stop an auto-started recording after it's gone 15 s. Manual recordings are never auto-stopped.
@@ -97,6 +99,8 @@ GET /api/meetings/:id/live ─▶ lines so far (dashboard opened or reloaded mid
 transcript.json is written only when the live transcript covers the whole meeting: the analyzers start alongside capture (so the first seconds are heard), and a track error or a finish slower than 10 s means nothing is written and the after-meeting job runs instead. Lines are accepted only for the meeting being recorded.
 
 Best effort: if the language or the model isn't available yet (it's requested for next time), the meeting is transcribed after it ends as before; a live failure never touches the recording.
+
+Transcript lines are also checked by sound (`AgentCore/AudioEvidence.swift`, after both engines and in the live transcript): 10 ms loudness envelopes of the mic and the call audio. A "You" line whose envelope correlates ≥0.6 with the call audio within a 0–300 ms lag is an echo and is dropped. This works across languages and spellings, unlike the word check. Lines whose track stays under -50 dBFS (invented text over silence) and fragments with fewer than two letters are dropped too.
 
 ## Recorder robustness
 

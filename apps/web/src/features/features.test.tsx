@@ -162,7 +162,7 @@ describe("SettingsView", () => {
     await userEvent.type(screen.getByLabelText(/Other apps/), "com.hnc.Discord");
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved")).toBeInTheDocument();
-    expect(JSON.parse(calls.at(-1)!.body!)).toEqual({ ...DEFAULT_SETTINGS, autoRecord: false, quality: "720p10", extraApps: ["com.hnc.Discord"],
+    expect(JSON.parse(calls.at(-1)!.body!)).toEqual({ ...DEFAULT_SETTINGS, autoRecord: true, quality: "720p10", extraApps: ["com.hnc.Discord"],
       transcription: { ...DEFAULT_SETTINGS.transcription, language: "hi_IN" } });
   });
 
@@ -525,5 +525,16 @@ describe("live transcript", () => {
       liveLines={[line, { start: 4, end: 5, speaker: "You", text: "Hi all" }]} onDeleted={vi.fn()} />);
     expect(await screen.findByText("Hi all")).toBeInTheDocument();
     expect(screen.getAllByText("Good morning")).toHaveLength(1);
+  });
+});
+
+describe("ask mode explained", () => {
+  it("says what happens when automatic recording is off", async () => {
+    mockFetch({
+      "GET /api/settings": () => json(DEFAULT_SETTINGS),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [], whisperLanguages: [], engines: { whisper: null, qwen: null } }),
+    });
+    render(<SettingsView />);
+    expect(await screen.findByText(/press Record to start\. Nothing records until you do/)).toBeInTheDocument();
   });
 });

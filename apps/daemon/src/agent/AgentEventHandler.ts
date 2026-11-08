@@ -63,6 +63,11 @@ export function createAgentEventHandler(d: AgentEventDeps) {
         });
       case "tray":
         if (event.action === "toggle") return d.recording.toggle();
+        // Record only ever starts (a double click must not stop what the first click started).
+        if (event.action === "record") {
+          if (!d.detection.recordSuggested() && d.recording.stateName === "idle") await d.recording.toggle();
+          return;
+        }
         if (event.action === "openDashboard") return d.agent.send({ cmd: "openUrl", url: d.dashboardUrl() });
         if (event.action === "openFolder") return d.openFolder();
         // quit: finish the file cleanly; the agent waits for the idle state before exiting.

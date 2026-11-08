@@ -37,7 +37,7 @@ export function tempDirs() {
   return { root, meetingsDir, stateDir, trashDir, webDist };
 }
 
-export async function makeContainer(opts: { freeBytes?: number; transcriberPath?: string | null; spawner?: Spawner } = {}) {
+export async function makeContainer(opts: { freeBytes?: number; transcriberPath?: string | null; spawner?: Spawner; autoRecord?: boolean } = {}) {
   const dirs = tempDirs();
   const agent = new FakeAgent();
   const opened: string[] = [];
@@ -55,6 +55,7 @@ export async function makeContainer(opts: { freeBytes?: number; transcriberPath?
     spawner: opts.spawner,
     reveal: (path) => revealed.push(path),
   });
+  if (opts.autoRecord) await container.settings.update({ ...container.settings.get(), autoRecord: true });
   return { container, agent, dirs, opened, revealed };
 }
 

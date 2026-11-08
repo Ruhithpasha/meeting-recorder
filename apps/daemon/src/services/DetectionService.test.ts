@@ -1,4 +1,4 @@
-import type { MicEvent } from "@meeting-recorder/shared";
+import type { DaemonCommand, MicEvent } from "@meeting-recorder/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeContainer } from "../../test/helpers/harness.ts";
 import { compileRules, matchMeeting, OWN_BUNDLE_ID, START_AFTER_MS, STOP_AFTER_MS, type DetectionRule, CONTINUE_AFTER_MS, MAX_CONTINUATIONS } from "./DetectionService.ts";
@@ -58,7 +58,7 @@ describe("DetectionService hysteresis", () => {
   const zoom = mic(["us.zoom.xos"]);
 
   it(`starts only after the match holds ${START_AFTER_MS} ms`, async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     c.detection.onMic(zoom);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS - 1);
     await c.recording.settled();
@@ -70,7 +70,7 @@ describe("DetectionService hysteresis", () => {
   });
 
   it("a match that drops before the start delay never starts", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     c.detection.onMic(zoom);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS - 500);
     c.detection.onMic(off);
@@ -79,7 +79,7 @@ describe("DetectionService hysteresis", () => {
   });
 
   async function autoRecording() {
-    const ctx = await makeContainer();
+    const ctx = await makeContainer({ autoRecord: true });
     ctx.container.detection.onMic(zoom);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS);
     await ctx.container.recording.settled();
@@ -162,7 +162,7 @@ describe("DetectionService hysteresis", () => {
   });
 
   it("a failed auto start is not retried every 3 s while the meeting continues", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     c.detection.onMic(zoom);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS);
     await c.recording.settled();
@@ -188,7 +188,7 @@ describe("DetectionService hysteresis", () => {
   });
 
   it("never stops a manual recording", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     await c.recording.toggle();
     await c.recording.dispatch({ type: "agentStarted", meetingId: agent.starts[0]!.meetingId });
     c.detection.onMic(off);
@@ -197,7 +197,7 @@ describe("DetectionService hysteresis", () => {
   });
 
   it("does nothing when auto-record is off in settings", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     await c.settings.update({ ...c.settings.get(), autoRecord: false });
     c.detection.onMic(zoom);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS * 2);
@@ -205,7 +205,7 @@ describe("DetectionService hysteresis", () => {
   });
 
   it("does nothing when disabled (protocol mismatch), including a start already pending", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     c.detection.onMic(zoom);
     c.detection.setEnabled(false);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS * 2);
@@ -215,12 +215,88 @@ describe("DetectionService hysteresis", () => {
   });
 
   it("repeated match events while waiting start only once", async () => {
-    const { container: c, agent } = await makeContainer();
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
     c.detection.onMic(zoom);
     c.detection.onMic(zoom);
     c.detection.onMic(zoom);
     await vi.advanceTimersByTimeAsync(START_AFTER_MS);
     await c.recording.settled();
     expect(agent.starts).toHaveLength(1);
+  });
+});
+
+describe("ask mode (the default): a detected meeting asks, nothing records until Record is pressed", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] }));
+  afterEach(() => vi.useRealTimers());
+  const zoom = mic(["us.zoom.xos"]);
+  const suggests = (agent: { sent: DaemonCommand[] }) => agent.sent.filter((c) => c.cmd === "suggest");
+
+  it("shows the Record prompt instead of recording", async () => {
+    const { container: c, agent } = await makeContainer();
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS);
+    await c.recording.settled();
+    expect(agent.starts).toHaveLength(0);
+    expect(suggests(agent)).toEqual([{ cmd: "suggest", label: "Zoom" }]);
+    c.detection.onMic(zoom); // the meeting goes on: asked once, not again and again
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS * 3);
+    expect(suggests(agent)).toHaveLength(1);
+  });
+
+  it("Record starts it; it hides the prompt and stops by itself when the meeting ends", async () => {
+    const { container: c, agent } = await makeContainer();
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS);
+    await c.onAgentEvent({ type: "tray", action: "record" });
+    await c.recording.settled();
+    expect(agent.starts).toHaveLength(1);
+    expect(c.repo.get(agent.starts[0]!.meetingId)?.app).toBe("Zoom");
+    expect(suggests(agent).at(-1)).toEqual({ cmd: "suggest" }); // hidden
+    await c.recording.dispatch({ type: "agentStarted", meetingId: agent.starts[0]!.meetingId });
+    c.detection.onMic(off);
+    await vi.advanceTimersByTimeAsync(STOP_AFTER_MS);
+    await c.recording.settled();
+    expect(agent.last("stop")).toBeDefined();
+  });
+
+  it("the prompt goes away when the meeting ends without recording", async () => {
+    const { container: c, agent } = await makeContainer();
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS);
+    c.detection.onMic(off);
+    expect(suggests(agent).at(-1)).toEqual({ cmd: "suggest" });
+    await c.onAgentEvent({ type: "tray", action: "record" }); // a late click: nothing suggested, toggles instead
+    await c.recording.settled();
+    expect(agent.starts).toHaveLength(1);
+    expect(c.repo.get(agent.starts[0]!.meetingId)?.app).toBe("Manual");
+  });
+
+  it("double-clicking Record starts once and never stops what it started", async () => {
+    const { container: c, agent } = await makeContainer();
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS);
+    await Promise.all([c.onAgentEvent({ type: "tray", action: "record" }), c.onAgentEvent({ type: "tray", action: "record" })]);
+    await c.recording.settled();
+    expect(agent.starts).toHaveLength(1);
+    expect(agent.last("stop")).toBeUndefined();
+    expect(c.recording.stateName).toBe("starting");
+  });
+
+  it("a protocol mismatch hides the prompt and Record does nothing detection-driven", async () => {
+    const { container: c, agent } = await makeContainer();
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS);
+    c.detection.setEnabled(false);
+    expect(suggests(agent).at(-1)).toEqual({ cmd: "suggest" });
+    expect(c.detection.recordSuggested()).toBe(false);
+  });
+
+  it("automatic recording on: records without asking", async () => {
+    const { container: c, agent } = await makeContainer({ autoRecord: true });
+    c.detection.onMic(zoom);
+    await vi.advanceTimersByTimeAsync(START_AFTER_MS);
+    await c.recording.settled();
+    expect(agent.starts).toHaveLength(1);
+    expect(suggests(agent)).toHaveLength(0);
   });
 });

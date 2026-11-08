@@ -1,7 +1,10 @@
 // Decides when a meeting starts and ends, from the agent's mic events.
 //
-//   mic event ──▶ match rules ──┬─ match held 3 s ─────────────▶ start (auto)
-//                               └─ no match held 15 s ─────────▶ stop  (only auto-started recordings)
+//   mic event ──▶ match rules ──┬─ match held 3 s ─▶ automatic recording on:  start
+//                               │                    off (default): ask (a "Record" prompt; nothing
+//                               │                    records until the user presses it)
+//                               └─ no match held 15 s ─────────▶ stop (recordings started by
+//                                                                  detection or from the prompt)
 //
 // Hysteresis: a start/stop timer is cancelled if the signal flips back before it fires, so a muted
 // mic for a few seconds or a brief window switch never splits a meeting.
@@ -61,12 +64,17 @@ export function matchMeeting(event: MicEvent, rules: CompiledRule[], extraApps: 
   return null;
 }
 
+/** Sends the Record prompt to the agent (label shows it, none hides it). */
+export type Prompt = (label: string | null) => void;
+
 export class DetectionService {
   private enabled = true;
   private matching = false;      // last mic event matched a meeting
   private suppressed = false;    // recorder went idle mid-meeting: wait for the meeting to end
   private wasActive = false;
   private continuations = 0;     // recordings restarted after a recorder failure, this meeting
+  private suggested: Match | null = null; // the meeting the Record prompt is showing for
+  private readonly prompt: Prompt;
   private startTimer: NodeJS.Timeout | null = null;
   private stopTimer: NodeJS.Timeout | null = null;
   private readonly rules: CompiledRule[];
@@ -75,14 +83,16 @@ export class DetectionService {
   private readonly settings: () => Settings;
   private readonly log: Logger;
 
-  constructor(opts: { recording: RecordingService; settings: () => Settings; log: Logger; bus: EventBus; rules?: DetectionRule[] }) {
+  constructor(opts: { recording: RecordingService; settings: () => Settings; log: Logger; bus: EventBus; rules?: DetectionRule[]; prompt?: Prompt }) {
     this.recording = opts.recording;
+    this.prompt = opts.prompt ?? (() => {});
     this.settings = opts.settings;
     this.log = opts.log;
     this.rules = compileRules(opts.rules ?? (rulesFile.rules as DetectionRule[]));
     this.unsubscribe = opts.bus.subscribe((event) => {
       if (event.type !== "status") return;
       const active = event.status.state !== "idle";
+      if (active) this.hidePrompt(); // recording now: the prompt has done its job
       if (this.wasActive && !active && this.matching) {
         const crashed = this.recording.crashedAutoMeeting;
         if (crashed && this.enabled && this.continuations < MAX_CONTINUATIONS) this.continueAfterCrash(crashed);
@@ -92,31 +102,54 @@ export class DetectionService {
     });
   }
 
+  /** The Record button on the prompt: record the suggested meeting (stops itself when the meeting
+   *  ends, like an automatic recording). False if there's nothing to record. */
+  recordSuggested(): boolean {
+    const match = this.suggested;
+    if (!match || !this.enabled || this.recording.stateName !== "idle") return false;
+    this.hidePrompt();
+    this.log.info(match, "recording the detected meeting (from the prompt)");
+    void this.recording.dispatch({ type: "start", trigger: { ...match, source: "auto" } });
+    return true;
+  }
+
+  private hidePrompt(): void {
+    if (!this.suggested) return;
+    this.suggested = null;
+    this.prompt(null);
+  }
+
   /** Disabled on protocol mismatch: never auto-record with an agent we can't trust to understand us. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.clearStart();
+    if (!enabled) { this.clearStart(); this.hidePrompt(); }
   }
 
   onMic(event: MicEvent): void {
-    const match = this.enabled && this.settings().autoRecord
-      ? matchMeeting(event, this.rules, this.settings().extraApps)
-      : null;
+    const match = this.enabled ? matchMeeting(event, this.rules, this.settings().extraApps) : null;
     this.matching = match !== null;
 
     if (match) {
       this.clearStop();
-      if (this.recording.stateName === "idle" && !this.startTimer && !this.suppressed) {
+      if (this.recording.stateName === "idle" && !this.startTimer && !this.suppressed && !this.suggested) {
         this.startTimer = setTimeout(() => {
           this.startTimer = null;
-          this.log.info(match, "meeting detected, starting recording");
-          void this.recording.dispatch({ type: "start", trigger: { ...match, source: "auto" } });
+          if (this.recording.stateName !== "idle") return;
+          if (this.settings().autoRecord) {
+            this.log.info(match, "meeting detected, starting recording");
+            void this.recording.dispatch({ type: "start", trigger: { ...match, source: "auto" } });
+          } else {
+            this.log.info(match, "meeting detected, asking whether to record");
+            this.suggested = match;
+            this.prompt(match.app);
+          }
         }, START_AFTER_MS);
       }
       return;
     }
 
     this.clearStart();
+    this.hidePrompt(); // the meeting is over
     this.suppressed = false; // the meeting is over: the next one may auto-record again
     this.continuations = 0;
     const active = this.recording.stateName === "starting" || this.recording.stateName === "recording";

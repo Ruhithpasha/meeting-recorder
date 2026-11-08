@@ -105,6 +105,6 @@ describe("App", () => {
     render(<App />);
     await screen.findByText("No recordings yet");
     await userEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await waitFor(() => expect(screen.getByLabelText("Record meetings automatically")).toBeChecked());
+    await waitFor(() => expect(screen.getByLabelText("Record meetings automatically")).not.toBeChecked()); // automatic recording is off by default (ask mode);
   });
 });

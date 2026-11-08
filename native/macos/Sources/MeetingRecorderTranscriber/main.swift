@@ -155,7 +155,8 @@ func transcribeWithWhisper() async throws -> Transcript {
         do { segments += try await recognizer.recognize(pcm, speaker: labels[index]) }
         catch { throw StepError(step: "transcribing audio track \(index + 1)", underlying: error) }
     }
-    return Transcript(language: recognizer.language ?? "auto", durationSec: duration, segments: TranscriptCleanup.clean(segments))
+    let checked = acousticFilter(segments, labels: labels, scratch: scratch)
+    return Transcript(language: recognizer.language ?? "auto", durationSec: duration, segments: TranscriptCleanup.clean(checked))
 }
 
 if engine == "whisper" {
@@ -226,13 +227,37 @@ func transcribe() async throws -> Transcript {
         } catch { throw StepError(step: "transcribing audio track \(index + 1)", underlying: error) }
         segments += try await collector.value
     }
-    return Transcript(language: locale.identifier, durationSec: duration, segments: TranscriptCleanup.clean(segments))
+    let checked = acousticFilter(segments, labels: labels, scratch: scratch)
+    return Transcript(language: locale.identifier, durationSec: duration, segments: TranscriptCleanup.clean(checked))
 }
 
 struct StepError: LocalizedError {
     let step: String
     let underlying: Error
     var errorDescription: String? { "\(step): \((underlying as NSError).localizedDescription) (\((underlying as NSError).domain) \((underlying as NSError).code))" }
+}
+
+/// Drops echo and invented lines by their sound (AudioEvidence), using each track's extracted
+/// 16 kHz PCM (laid out on the recording's timeline, so frame = seconds × 100).
+func acousticFilter(_ segments: [Transcript.Segment], labels: [String], scratch: URL) -> [Transcript.Segment] {
+    /// Read in chunks of whole 10 ms frames, so memory stays flat however long the meeting.
+    func envelope(_ speaker: String) -> [Double]? {
+        guard let index = labels.firstIndex(of: speaker),
+              let file = try? AVAudioFile(forReading: scratch.appendingPathComponent("track\(index).caf"), commonFormat: .pcmFormatFloat32, interleaved: false)
+        else { return nil }
+        let rate = file.processingFormat.sampleRate
+        let frame = AVAudioFrameCount(max(1, Int(rate) / AudioEvidence.framesPerSecond))
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frame * 1_000) else { return nil } // 10 s
+        var result: [Double] = []
+        while file.framePosition < file.length {
+            guard (try? file.read(into: buffer)) != nil, buffer.frameLength > 0, let data = buffer.floatChannelData?[0] else { break }
+            result += AudioEvidence.envelope(Array(UnsafeBufferPointer(start: data, count: Int(buffer.frameLength))), sampleRate: rate)
+        }
+        return result
+    }
+    let kept = AudioEvidence.filter(segments, mic: envelope("You"), system: envelope("Others"))
+    if kept.count < segments.count { emit(["status": "filtered", "dropped": segments.count - kept.count]) }
+    return kept
 }
 
 /// Decodes one audio track to 16-bit, 16 kHz mono PCM in a temporary file, buffer by buffer.

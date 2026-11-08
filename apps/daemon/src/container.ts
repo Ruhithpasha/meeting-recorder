@@ -80,7 +80,10 @@ export async function createContainer(o: ContainerOptions) {
     hasDiskSpace: () => disk.hasSpace(),
     merge,
   });
-  const detection = new DetectionService({ recording, settings: () => settings.get(), log: o.log, bus });
+  const detection = new DetectionService({
+    recording, settings: () => settings.get(), log: o.log, bus,
+    prompt: (label) => o.agent.send(label ? { cmd: "suggest", label } : { cmd: "suggest" }),
+  });
   const meetings = new MeetingService(repo, recording, bus);
   const models = new ModelService({
     bus, log: o.log, transcriberPath: o.transcriberPath ?? null, modelsDir: join(o.stateDir, "models"), spawner: o.spawner,

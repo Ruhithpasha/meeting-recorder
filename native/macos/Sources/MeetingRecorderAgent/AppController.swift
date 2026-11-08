@@ -82,6 +82,8 @@ final class AppController: NSObject, NSApplicationDelegate {
         host.onFatal = { [weak self] in self?.menu.showError($0) }
 
         indicator.onClick = { [weak self] in self?.send(EventEncoder.tray(.openDashboard)) }
+        indicator.onRecord = { [weak self] in self?.send(EventEncoder.tray(.record)) }
+        indicator.onStop = { [weak self] in self?.send(EventEncoder.tray(.toggle)) }
         recorder.onTranscript = { [weak self] id, s in
             self?.send(EventEncoder.transcript(meetingId: id, speaker: s.speaker == "You" ? .you : .others, start: s.start, end: s.end, text: s.text))
         }
@@ -166,6 +168,8 @@ final class AppController: NSObject, NSApplicationDelegate {
             if quitting, c.status == .idle { NSApp.terminate(nil) }
         case .openUrl(let c):
             if let url = URL(string: c.url) { dashboard.show(url: url) } // in-app window, not a browser
+        case .suggest(let c):
+            if let label = c.label { indicator.ask(label: label) } else { indicator.hidePrompt() }
         case .share(let c):
             // Path built here from the validated id and a fixed file name, never taken from the daemon.
             let file = URL(fileURLWithPath: meetingsDir).appendingPathComponent(c.meetingId).appendingPathComponent(c.file.rawValue)

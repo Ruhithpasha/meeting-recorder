@@ -28,6 +28,7 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
     public let startCommand: StartCommand?
     public let stateCommand: StateCommand?
     public let stopCommand: StopCommand?
+    public let suggestCommand: SuggestCommand?
     public let transcriptEvent: TranscriptEvent?
     public let trayEvent: TrayEvent?
 
@@ -42,11 +43,12 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
         case startCommand = "startCommand"
         case stateCommand = "stateCommand"
         case stopCommand = "stopCommand"
+        case suggestCommand = "suggestCommand"
         case transcriptEvent = "transcriptEvent"
         case trayEvent = "trayEvent"
     }
 
-    public init(helloEvent: HelloEvent?, micEvent: MicEvent?, openUrlCommand: OpenUrlCommand?, permissionEvent: PermissionEvent?, powerEvent: PowerEvent?, recordingEvent: RecordingEvent?, shareCommand: ShareCommand?, startCommand: StartCommand?, stateCommand: StateCommand?, stopCommand: StopCommand?, transcriptEvent: TranscriptEvent?, trayEvent: TrayEvent?) {
+    public init(helloEvent: HelloEvent?, micEvent: MicEvent?, openUrlCommand: OpenUrlCommand?, permissionEvent: PermissionEvent?, powerEvent: PowerEvent?, recordingEvent: RecordingEvent?, shareCommand: ShareCommand?, startCommand: StartCommand?, stateCommand: StateCommand?, stopCommand: StopCommand?, suggestCommand: SuggestCommand?, transcriptEvent: TranscriptEvent?, trayEvent: TrayEvent?) {
         self.helloEvent = helloEvent
         self.micEvent = micEvent
         self.openUrlCommand = openUrlCommand
@@ -57,6 +59,7 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
         self.startCommand = startCommand
         self.stateCommand = stateCommand
         self.stopCommand = stopCommand
+        self.suggestCommand = suggestCommand
         self.transcriptEvent = transcriptEvent
         self.trayEvent = trayEvent
     }
@@ -91,6 +94,7 @@ public extension ProtocolRoot {
         startCommand: StartCommand?? = nil,
         stateCommand: StateCommand?? = nil,
         stopCommand: StopCommand?? = nil,
+        suggestCommand: SuggestCommand?? = nil,
         transcriptEvent: TranscriptEvent?? = nil,
         trayEvent: TrayEvent?? = nil
     ) -> ProtocolRoot {
@@ -105,6 +109,7 @@ public extension ProtocolRoot {
             startCommand: startCommand ?? self.startCommand,
             stateCommand: stateCommand ?? self.stateCommand,
             stopCommand: stopCommand ?? self.stopCommand,
+            suggestCommand: suggestCommand ?? self.suggestCommand,
             transcriptEvent: transcriptEvent ?? self.transcriptEvent,
             trayEvent: trayEvent ?? self.trayEvent
         )
@@ -1052,6 +1057,71 @@ public enum StopCommandCmd: String, Codable, Equatable, Sendable {
 // for types that require the use of JSONAny, nor will the implementation of Hashable be
 // synthesized for types that have collections (such as arrays or dictionaries).
 
+/// Ask the user whether to record a detected meeting (automatic recording off). With label:
+/// show the prompt; without: hide it.
+// MARK: - SuggestCommand
+public struct SuggestCommand: Codable, Equatable, Sendable {
+    public let cmd: SuggestCommandCmd
+    public let label: String?
+
+    public enum CodingKeys: String, CodingKey {
+        case cmd = "cmd"
+        case label = "label"
+    }
+
+    public init(cmd: SuggestCommandCmd, label: String?) {
+        self.cmd = cmd
+        self.label = label
+    }
+}
+
+// MARK: SuggestCommand convenience initializers and mutators
+
+public extension SuggestCommand {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(SuggestCommand.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        cmd: SuggestCommandCmd? = nil,
+        label: String?? = nil
+    ) -> SuggestCommand {
+        return SuggestCommand(
+            cmd: cmd ?? self.cmd,
+            label: label ?? self.label
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+public enum SuggestCommandCmd: String, Codable, Equatable, Sendable {
+    case suggest = "suggest"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
 /// One finished line of the live transcript. The agent also writes transcript.json when the
 /// recording stops.
 // MARK: - TranscriptEvent
@@ -1195,10 +1265,13 @@ public extension TrayEvent {
     }
 }
 
+/// record: start recording the meeting the daemon suggested (the Record button on the
+/// prompt).
 public enum TrayAction: String, Codable, Equatable, Sendable {
     case openDashboard = "openDashboard"
     case openFolder = "openFolder"
     case quit = "quit"
+    case record = "record"
     case toggle = "toggle"
 }
 
@@ -1225,4 +1298,4 @@ func newJSONEncoder() -> JSONEncoder {
 }
 
 /// Agent and daemon must agree on this, or auto-recording is blocked.
-public let protocolVersion = 1
+public let protocolVersion = 2

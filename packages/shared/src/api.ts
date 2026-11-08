@@ -48,7 +48,7 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  autoRecord: true,
+  autoRecord: false, // ask: a detected meeting shows a Record button; nothing records until pressed
   quality: "720p30",
   transcription: { enabled: true, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" },
   extraApps: [],

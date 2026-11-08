@@ -41,9 +41,10 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 
 ## Using it
 
-- **Automatic:** join a call. After about 3 seconds a notification says recording started, the menu-bar icon turns red with a running timer, and a small floating **REC** pill appears (drag it anywhere; click it to open the dashboard; it isn't in the recording). About 15 seconds after the call ends, the recording is saved.
+- **You decide when it records.** Join a call and after about 3 seconds a small floating pill asks: **"Google Meet detected · Record"**. Nothing is recorded until you press Record. (Prefer hands-off? Turn on "Record meetings automatically" in Settings.)
+- **While recording**, the pill shows **REC 12:34** with a **Stop** button, and the menu-bar icon turns red with a timer. Drag the pill anywhere; click it to open the dashboard; it isn't in the recording and stays off full-screen apps. About 15 seconds after the call ends, a recording started from the prompt stops by itself.
 - **Built not to drop a meeting:** video, the call's audio and your mic are each recorded to their own file and joined into one `recording.mp4` when the meeting ends (in seconds, without re-encoding). If macOS's file writer fails on one of them, only that one restarts, straight away; the others keep recording.
-- **Manual:** menu bar → Start/Stop Recording, or the dashboard's button.
+- **Start and stop any time:** the dashboard's Start/Stop button, menu bar → Start/Stop Recording (⌘R), or the pill.
 - **Stopping early:** if you stop an automatic recording during a call, it won't restart until that call ends.
 - **Browser calls (Meet, Teams web):** these need the meeting tab to be the visible tab, because the app checks the window title. Joining with your mic muted at the OS level isn't detected; start those manually.
 - **Dashboard:** opens in the app's own window (no browser, nothing hosted). Get there by opening Meeting Recorder from Finder, Spotlight or Launchpad, choosing menu bar → Open Dashboard, or running `meeting-recorder open`.
@@ -75,7 +76,8 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 - **Every meeting gets its own summary**, saved in its own folder. Use **Summarize now** on a meeting to make one right away, or **Retry** if it failed (the reason is shown).
 - Transcription quality:
   - Audio is extracted losslessly (16 kHz PCM) before recognition, and recordings use higher-bitrate audio (160 kbps for others, 96 kbps for you).
-  - Your voice leaking from the speakers into your mic is removed, so lines aren't duplicated under "You".
+  - Echo is removed by sound, not by words: when your mic hears the call through your speakers, those "You" lines rise and fall with the call audio and are dropped, whatever the language or spelling.
+  - Lines over silence (the "Thank you." a speech model invents when nobody speaks) and one-letter fragments are dropped.
   - Short fragments from the same speaker are merged into readable sentences.
   - Pick the **meeting language** in Settings (for example English (India) or Hindi) if it differs from your Mac's language.
 - Turn either off in Settings.

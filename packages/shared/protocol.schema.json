@@ -40,6 +40,9 @@
     },
     "transcriptEvent": {
       "$ref": "#/definitions/TranscriptEvent"
+    },
+    "suggestCommand": {
+      "$ref": "#/definitions/SuggestCommand"
     }
   },
   "definitions": {
@@ -89,6 +92,9 @@
         },
         {
           "$ref": "#/definitions/ShareCommand"
+        },
+        {
+          "$ref": "#/definitions/SuggestCommand"
         }
       ],
       "discriminator": {
@@ -425,8 +431,10 @@
         "toggle",
         "openDashboard",
         "openFolder",
-        "quit"
-      ]
+        "quit",
+        "record"
+      ],
+      "description": "record: start recording the meeting the daemon suggested (the Record button on the prompt)."
     },
     "AgentErrorCode": {
       "type": "string",
@@ -532,7 +540,25 @@
           "maxLength": 4000
         }
       }
+    },
+    "SuggestCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cmd"
+      ],
+      "description": "Ask the user whether to record a detected meeting (automatic recording off). With label: show the prompt; without: hide it.",
+      "properties": {
+        "cmd": {
+          "const": "suggest"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
     }
   },
-  "x-protocolVersion": 1
+  "x-protocolVersion": 2
 }

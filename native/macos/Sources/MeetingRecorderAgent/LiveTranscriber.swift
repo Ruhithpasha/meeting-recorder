@@ -39,6 +39,9 @@ final class LiveTranscriber: @unchecked Sendable {
     fileprivate let queue = DispatchQueue(label: "live-transcriber", qos: .utility)
     private var tracks: [Track] = []          // [Others, You]
     private var segments: [Transcript.Segment] = []
+    /// Loudness envelopes (AudioEvidence frames, on the recording's timeline) of Others and You,
+    /// built from the audio as it's fed, for the echo/silence check when the transcript is saved.
+    private var envelopes: [[Double]] = [[], []]
     private var failed = false
     private var firstFed: Double?             // seconds into the recording of the first audio fed
     /// Audio this far in (or later) at the first feed means the beginning was missed.
@@ -97,6 +100,7 @@ final class LiveTranscriber: @unchecked Sendable {
             let track = tracks[index]
             if track.offset == nil { track.offset = seconds }
             guard let pcm = Self.convert(buffer, to: track.format, using: &track.converter) else { return }
+            recordEnvelope(pcm, track: index, at: seconds)
             // One continuous stream, no per-buffer start times: the converter holds a few samples
             // back between buffers, so stamping each with its input time made them overlap. Times
             // are put back on the recording's timeline with the track's offset.
@@ -113,10 +117,11 @@ final class LiveTranscriber: @unchecked Sendable {
             try? await track.analyzer.finalizeAndFinishThroughEndOfInput()
             await track.results?.value
         }
-        let (all, complete): ([Transcript.Segment], Bool) = queue.sync {
-            (segments, !failed && (firstFed ?? .infinity) < Self.maxMissedStartSeconds)
+        let (raw, complete, envelopes): ([Transcript.Segment], Bool, [[Double]]) = queue.sync {
+            (segments, !failed && (firstFed ?? .infinity) < Self.maxMissedStartSeconds, self.envelopes)
         }
         guard complete else { return nil }
+        let all = AudioEvidence.filter(raw, mic: envelopes[1], system: envelopes[0]) // echo and silence, by sound
         let transcript = Transcript(language: locale.identifier, durationSec: durationSec, segments: TranscriptCleanup.clean(all))
         do {
             try transcript.write(to: directory)
@@ -125,6 +130,19 @@ final class LiveTranscriber: @unchecked Sendable {
             return nil
         }
         return transcript.segments.count
+    }
+
+    /// Adds this buffer's loudness (10 ms frames) at its place on the recording's timeline.
+    private func recordEnvelope(_ pcm: AVAudioPCMBuffer, track index: Int, at seconds: Double) {
+        let count = Int(pcm.frameLength)
+        let samples: [Float]
+        if let data = pcm.floatChannelData?[0] {
+            samples = Array(UnsafeBufferPointer(start: data, count: count))
+        } else if let data = pcm.int16ChannelData?[0] { // the analyzer often wants 16-bit
+            samples = UnsafeBufferPointer(start: data, count: count).map { Float($0) / 32_768 }
+        } else { return }
+        let frames = AudioEvidence.envelope(samples, sampleRate: pcm.format.sampleRate)
+        AudioEvidence.write(frames, at: seconds, into: &envelopes[index]) // exact place: no drift
     }
 
     /// Stops feeding: what's been transcribed so far is still shown, but not saved as the transcript.

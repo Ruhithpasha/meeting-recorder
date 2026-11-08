@@ -16,6 +16,7 @@ export interface ProtocolRoot {
     startCommand?:    StartCommand;
     stateCommand?:    StateCommand;
     stopCommand?:     StopCommand;
+    suggestCommand?:  SuggestCommand;
     transcriptEvent?: TranscriptEvent;
     trayEvent?:       TrayEvent;
     [property: string]: unknown;
@@ -140,6 +141,15 @@ export interface StopCommand {
 }
 
 /**
+ * Ask the user whether to record a detected meeting (automatic recording off). With label:
+ * show the prompt; without: hide it.
+ */
+export interface SuggestCommand {
+    cmd:    "suggest";
+    label?: string;
+}
+
+/**
  * One finished line of the live transcript. The agent also writes transcript.json when the
  * recording stops.
  */
@@ -159,7 +169,11 @@ export interface TrayEvent {
     type:   "tray";
 }
 
-export type TrayAction = "toggle" | "openDashboard" | "openFolder" | "quit";
+/**
+ * record: start recording the meeting the daemon suggested (the Record button on the
+ * prompt).
+ */
+export type TrayAction = "toggle" | "openDashboard" | "openFolder" | "quit" | "record";
 
 /** Agent and daemon must agree on this, or auto-recording is blocked. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;

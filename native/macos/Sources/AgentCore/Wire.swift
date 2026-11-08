@@ -13,6 +13,7 @@ public enum DaemonCommand: Equatable, Sendable {
     case state(StateCommand)
     case openUrl(OpenUrlCommand)
     case share(ShareCommand)
+    case suggest(SuggestCommand)
 }
 
 public enum WireError: Error, Equatable, CustomStringConvertible {
@@ -50,6 +51,7 @@ public struct CommandValidator: Sendable {
         "state": ["cmd", "status", "label"],
         "openUrl": ["cmd", "url"],
         "share": ["cmd", "meetingId", "file"],
+        "suggest": ["cmd", "label"],
     ]
 
     public func decode(_ line: String) -> Result<DaemonCommand, WireError> {
@@ -71,6 +73,7 @@ public struct CommandValidator: Sendable {
             case "stop": command = .stop(try decoder.decode(StopCommand.self, from: data))
             case "state": command = .state(try decoder.decode(StateCommand.self, from: data))
             case "share": command = .share(try decoder.decode(ShareCommand.self, from: data))
+            case "suggest": command = .suggest(try decoder.decode(SuggestCommand.self, from: data))
             default: command = .openUrl(try decoder.decode(OpenUrlCommand.self, from: data))
             }
             if let problem = validate(command) { return .failure(.invalid(problem)) }
@@ -105,6 +108,9 @@ public struct CommandValidator: Sendable {
             return nil
         case .share(let c):
             return Self.isMeetingId(c.meetingId) ? nil : "invalid meetingId" // file is a fixed enum
+        case .suggest(let c):
+            guard let label = c.label else { return nil }
+            return (1...200).contains(label.count) ? nil : "invalid label"
         }
     }
 

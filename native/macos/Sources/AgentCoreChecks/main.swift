@@ -145,6 +145,8 @@ check(cjk.count >= 3 && cjk.allSatisfy { TranscriptChunker.estimatedTokens($0) <
 // MARK: Open-model text
 check(OpenModelText.whisperLanguage("hi_IN") == "hi" && OpenModelText.whisperLanguage("auto") == nil && OpenModelText.whisperLanguage(nil) == nil, "settings language -> Whisper code")
 check(OpenModelText.cleanWhisper("<|startoftranscript|><|en|><|0.00|> Good  morning.<|3.52|>") == "Good morning.", "Whisper special tokens stripped")
+check(OpenModelText.cleanWhisper("bye Thank you. Продолжение следует...") == "bye Thank you.", "Whisper subtitle credit removed, real thanks kept")
+check(OpenModelText.cleanWhisper("Thanks for watching!") == "" && OpenModelText.cleanWhisper("Subtitles by the Amara.org community") == "", "subtitle-credit-only lines become empty (then dropped)")
 let qwenOut = #"{"overview":"Sync.","keyPoints":["a"],"decisions":[],"actionItems":["Priya: docs"]} [end of text]"#
 check(OpenModelText.parseSummary(qwenOut) == MeetingSummary(overview: "Sync.", keyPoints: ["a"], decisions: [], actionItems: ["Priya: docs"]), "Qwen JSON summary parsed despite trailing text")
 check(OpenModelText.parseSummary("no json") == nil && OpenModelText.parseSummary(#"{"keyPoints":[]}"#) == nil, "bad summary output rejected")
@@ -224,6 +226,32 @@ do {
         check((try? PartsManifest.read(from: dir)) == nil, "parts.json rejected: \(bad)")
     }
     try? FileManager.default.removeItem(at: dir)
+}
+
+// MARK: Acoustic transcript checks (echo by sound, silence)
+do {
+    // A "speech-like" loudness pattern: bursts of syllables.
+    func speech(_ seed: Int, frames: Int) -> [Double] { (0..<frames).map { i in -30 + 20 * sin(Double(i * (seed + 3)) / 7) + Double((i * seed) % 5) } }
+    let system = speech(1, frames: 600)
+    let echo = Array(repeating: -90.0, count: 15) + system.prefix(585).map { $0 - 18 } // same shape, 150 ms late, quieter
+    let own = speech(7, frames: 600)
+    check(AudioEvidence.echoScore(mic: echo[100..<300], system: system, micStart: 100) > 0.9, "an echo of the call audio is recognized by its sound")
+    check(AudioEvidence.echoScore(mic: own[100..<300], system: system, micStart: 100) < 0.6, "your own voice is not an echo")
+    let lines = [Seg(start: 1, end: 3, speaker: "Others", text: "आपको 1100 रुपे"), Seg(start: 1.1, end: 3, speaker: "You", text: "आपको 1100 रुपय")]
+    check(AudioEvidence.filter(lines, mic: echo, system: system).map(\.speaker) == ["Others"], "an echo line is dropped even when spelled differently")
+    check(AudioEvidence.filter([Seg(start: 1, end: 3, speaker: "You", text: "Agreed")], mic: own, system: system).count == 1, "a real reply is kept")
+    let silent = Array(repeating: -80.0, count: 600)
+    check(AudioEvidence.filter([Seg(start: 0, end: 2, speaker: "Others", text: "Thank you.")], mic: silent, system: silent).isEmpty, "a line over silence (invented text) is dropped")
+    check(AudioEvidence.filter(lines, mic: nil, system: nil).count == 2, "without audio evidence nothing is dropped")
+    check(AudioEvidence.filter([Seg(start: 20, end: 21, speaker: "You", text: "अ"), Seg(start: 22, end: 23, speaker: "You", text: "-")], mic: nil, system: nil).isEmpty, "one-letter fragments dropped")
+    check(AudioEvidence.filter([Seg(start: 1, end: 2, speaker: "Others", text: "好"), Seg(start: 3, end: 4, speaker: "You", text: "はい")], mic: nil, system: nil).count == 2, "a one-character CJK word is kept")
+    // Ten minutes of 1024-sample buffers at 48 kHz (21.3 ms each, ~2.13 envelope frames apiece):
+    // written at their exact place, the envelope stays in step with real time.
+    var live: [Double] = []
+    var t = 0.0
+    while t < 600 { AudioEvidence.write([-30, -30, -30], at: t, into: &live); t += 1024.0 / 48_000 }
+    check(abs(Double(live.count) - 600 * 100) <= 3, "live envelope doesn't drift over 10 minutes (\(live.count) frames)")
+    check(AudioEvidence.envelope([Float](repeating: 0.1, count: 480), sampleRate: 48_000).count == 1 && abs(AudioEvidence.envelope([0.1, 0.1], sampleRate: 200)[0] + 20) < 0.01, "envelope in dBFS per 10 ms")
 }
 
 // MARK: Share command

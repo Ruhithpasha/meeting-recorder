@@ -55,7 +55,7 @@ export function RecordingBanner({ status, meeting }: { status: Status | null; me
         <div className="grid leading-tight">
           <span className="font-semibold">{LABEL[status.state]}{live && meeting ? `: ${meeting.app}` : ""}</span>
           <span className="text-sm text-muted-foreground">
-            {status.state === "idle" && status.agentConnected && "Zoom, Teams and Meet calls are recorded automatically"}
+            {status.state === "idle" && status.agentConnected && "Ready to record"}
             {live && "Your screen and both sides of the audio"}
             {status.state === "stopping" && "Finishing the file"}
             {!status.agentConnected && "Meeting Recorder isn't connected"}
