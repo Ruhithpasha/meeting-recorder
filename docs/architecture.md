@@ -115,7 +115,51 @@ Apple's on-device SpeechTranscriber (macOS 26) replaced the planned whisper.cpp:
 - the model runs in a system process, so our memory budget is untouched
 - it's built for long-form audio
 
-Measured: 11 s of speech transcribed in about 1 s, with our process using 0.05 s of CPU. macOS 15 users get everything except transcription. The job slot is reserved synchronously, so two triggers can't start two jobs.
+Measured: 11 s of speech transcribed in about 1 s, with our process using 0.05 s of CPU. On macOS 15, Apple's engine isn't available; the Whisper engine is. The job slot is reserved synchronously, so two triggers can't start two jobs.
+
+### Open-model engines (`MeetingRecorderTranscriber/OpenModels.swift`)
+
+Optional, chosen in Settings (`transcription.engine`, `transcription.summaryEngine`); the daemon passes `--engine whisper|qwen --models ~/.meeting-recorder/models`.
+
+```
+--engine whisper  WhisperKit 0.18.0 (exact SwiftPM pin) ─▶ argmaxinc/whisperkit-coreml large-v3 turbo 632 MB
+                  same per-track 16 kHz PCM + TranscriptCleanup; VAD chunking, 1 decoder worker
+--engine qwen     llama.cpp b12202 prebuilt (SHA-256 pinned) + Qwen3-1.7B Q8_0 GGUF (revision + SHA-256 pinned)
+                  llama-completion: 6k context, q8_0 KV cache, ≤4 threads, JSON-schema-constrained output
+                  same map-reduce as Apple's model (SummaryModel protocol), 3k-token chunks (our estimate can undercount Qwen tokens ~30%)
+```
+
+Resource rules:
+- Every job (both engines, and share copies) is spawned through `taskpolicy -b`: background QoS, so the work goes to the efficiency cores at low I/O priority. Jobs still run only when the Mac is idle and plugged in.
+- Each job leads its own process group and is stopped as a group, so llama.cpp never outlives a cancelled or killed summary.
+- Once downloaded, models are used straight from disk with no network call (works offline). The Whisper tokenizer is cached in the same folder (WhisperKit's default would be ~/Documents).
+- Whisper has its own language list (`whisperLanguages`, ~100 codes), so a fixed language can be chosen on any macOS.
+- Downloads happen inside the job, once. A file that fails its SHA-256 check is deleted, never used. While downloading, `{"status":"downloading"}` lines restart the daemon's time limit.
+- `--capabilities` reports why an engine can't run here (Intel Mac; less than 8 GB for Qwen), and Settings disables that choice with the reason.
+
+Measured (M2, 16 GB):
+
+| | Memory | Time |
+|---|---|---|
+| Whisper, warm | ~290 MB | 97 s of speech in 26 s |
+| Whisper, first run | ~620 MB | ~5 min, once (download + Core ML compile) |
+| Qwen | 1.2–2.4 GB peak, mostly the memory-mapped model (reclaimable) | ~2k tokens summarized in 16 s |
+
+## Sharing (`services/ShareService.ts`, `Exporter.swift`, `DashboardWindow.share`)
+
+```
+POST /api/meetings/:id/share {what: video|original|summary}
+  original/summary ─▶ agent {cmd:"share", meetingId, file}  ─▶ NSSharingServicePicker on the dashboard window
+  video ─▶ share.mp4 fresh (newer than recording.mp4)? share it
+        └▶ else spawn (taskpolicy -b) MeetingRecorderTranscriber --export recording.mp4 share.mp4
+             AVAssetReader (video + AVAssetReaderAudioMixOutput: both tracks mixed) ─▶ AVAssetWriter
+             H.264 ≤1280×720 1.2 Mbps (hardware) + AAC 128 kbps stereo; .part then rename
+           {type:"share", state, percent} SSE events ─▶ dashboard progress; on success, the share sheet
+```
+
+- One copy at a time (reserved before any await). Another meeting gets 409. Deleting the meeting stops its copy. A recording starting stops it (a re-encode must never compete with capture), and no copy starts while recording; the original can still be shared.
+- The share command has no path. The agent builds `<meetings>/<id>/<file>` itself from a validated id and a fixed file enum, so the daemon can't make it share anything else.
+- Measured: a 10 s 1080p test recording copied in 1.5 s with 46 MB of memory.
 
 ## Installer and updates (`scripts/`)
 

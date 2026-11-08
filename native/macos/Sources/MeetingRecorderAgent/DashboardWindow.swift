@@ -28,6 +28,16 @@ final class DashboardWindow: NSObject, NSWindowDelegate, WKNavigationDelegate {
         NSApp.activate()
     }
 
+    /// The standard macOS share sheet (AirDrop, Mail, Messages…) for one file, anchored to the
+    /// top of the dashboard window (the user just clicked Share there).
+    func share(_ file: URL) {
+        guard let window, let view = window.contentView else { return }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        let anchor = NSRect(x: view.bounds.midX, y: view.bounds.maxY - 80, width: 1, height: 1)
+        NSSharingServicePicker(items: [file]).show(relativeTo: anchor, of: view, preferredEdge: .minY)
+    }
+
     func close() {
         window?.close()
     }

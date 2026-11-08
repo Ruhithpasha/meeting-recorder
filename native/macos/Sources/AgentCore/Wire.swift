@@ -12,6 +12,7 @@ public enum DaemonCommand: Equatable, Sendable {
     case stop(StopCommand)
     case state(StateCommand)
     case openUrl(OpenUrlCommand)
+    case share(ShareCommand)
 }
 
 public enum WireError: Error, Equatable, CustomStringConvertible {
@@ -48,6 +49,7 @@ public struct CommandValidator: Sendable {
         "stop": ["cmd", "meetingId"],
         "state": ["cmd", "status", "label"],
         "openUrl": ["cmd", "url"],
+        "share": ["cmd", "meetingId", "file"],
     ]
 
     public func decode(_ line: String) -> Result<DaemonCommand, WireError> {
@@ -68,6 +70,7 @@ public struct CommandValidator: Sendable {
             case "start": command = .start(try decoder.decode(StartCommand.self, from: data))
             case "stop": command = .stop(try decoder.decode(StopCommand.self, from: data))
             case "state": command = .state(try decoder.decode(StateCommand.self, from: data))
+            case "share": command = .share(try decoder.decode(ShareCommand.self, from: data))
             default: command = .openUrl(try decoder.decode(OpenUrlCommand.self, from: data))
             }
             if let problem = validate(command) { return .failure(.invalid(problem)) }
@@ -99,6 +102,8 @@ public struct CommandValidator: Sendable {
                   let port = url.port, (1...65535).contains(port), c.url.hasPrefix("http://127.0.0.1:\(port)/")
             else { return "only the local dashboard may be opened" }
             return nil
+        case .share(let c):
+            return Self.isMeetingId(c.meetingId) ? nil : "invalid meetingId" // file is a fixed enum
         }
     }
 

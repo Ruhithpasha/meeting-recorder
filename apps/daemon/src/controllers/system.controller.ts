@@ -1,5 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import type { Settings } from "@meeting-recorder/shared";
+import type { JobsInfo, Settings } from "@meeting-recorder/shared";
 import type { Container } from "../container.ts";
 import { sessionCookieName, tokenMatcher, type SessionStore } from "../plugins/security.ts";
 
@@ -22,11 +22,16 @@ export function systemController(c: Container, token: string, sessions: SessionS
 
     status: async () => c.status.get(),
 
-    jobs: async () => ({
-      transcriptUnavailable: c.transcription.unavailableFor("transcript"),
-      summaryUnavailable: c.transcription.unavailableFor("summary"),
-      languages: await c.listLanguages(),
-    }),
+    jobs: async (): Promise<JobsInfo> => {
+      const caps = await c.capabilities();
+      return {
+        transcriptUnavailable: c.transcription.unavailableFor("transcript"),
+        summaryUnavailable: c.transcription.unavailableFor("summary"),
+        languages: caps.locales,
+        whisperLanguages: caps.whisperLanguages,
+        engines: { whisper: caps.whisper, qwen: caps.qwen },
+      };
+    },
 
     getSettings: async () => c.settings.get(),
 

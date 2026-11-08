@@ -151,7 +151,7 @@ describe("SettingsView", () => {
   it("loads, edits and saves settings", async () => {
     const calls = mockFetch({
       "GET /api/settings": () => json(DEFAULT_SETTINGS),
-      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: ["en_IN", "hi_IN"] }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: ["en_IN", "hi_IN"], whisperLanguages: ["hi", "en"], engines: { whisper: null, qwen: null } }),
       "PUT /api/settings": (init) => json(JSON.parse(String(init?.body))),
     });
     render(<SettingsView />);
@@ -187,8 +187,8 @@ describe("SettingsView", () => {
 
   it("the summary switch is disabled when transcription is off, and saves", async () => {
     const calls = mockFetch({
-      "GET /api/settings": () => json({ ...DEFAULT_SETTINGS, transcription: { enabled: false, summarize: true, language: "auto" } }),
-      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: "Summaries need Apple Intelligence turned on.", languages: [] }),
+      "GET /api/settings": () => json({ ...DEFAULT_SETTINGS, transcription: { enabled: false, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" } }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: "Summaries need Apple Intelligence turned on.", languages: [], whisperLanguages: ["hi", "en"], engines: { whisper: null, qwen: null } }),
       "PUT /api/settings": (init) => json(JSON.parse(String(init?.body))),
     });
     render(<SettingsView />);
@@ -198,7 +198,7 @@ describe("SettingsView", () => {
     await userEvent.click(summarize);
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await screen.findByText("Saved");
-    expect(JSON.parse(calls.at(-1)!.body!).transcription).toEqual({ enabled: true, summarize: false, language: "auto" });
+    expect(JSON.parse(calls.at(-1)!.body!).transcription).toEqual({ enabled: true, summarize: false, language: "auto", engine: "apple", summaryEngine: "apple" });
   });
 });
 
@@ -342,7 +342,7 @@ describe("v0.4 dashboard", () => {
   it("shows the saved language even when the language list couldn't load", async () => {
     mockFetch({
       "GET /api/settings": () => json({ ...DEFAULT_SETTINGS, transcription: { ...DEFAULT_SETTINGS.transcription, language: "hi_IN" } }),
-      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [] }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [], whisperLanguages: ["hi", "en"], engines: { whisper: null, qwen: null } }),
     });
     render(<SettingsView />);
     expect(await screen.findByLabelText("Meeting language")).toHaveValue("hi_IN");
@@ -351,7 +351,7 @@ describe("v0.4 dashboard", () => {
   it("explains unavailable summaries in settings", async () => {
     mockFetch({
       "GET /api/settings": () => json(DEFAULT_SETTINGS),
-      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: "Summaries need Apple Intelligence turned on.", languages: [] }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: "Summaries need Apple Intelligence turned on.", languages: [], whisperLanguages: ["hi", "en"], engines: { whisper: null, qwen: null } }),
     });
     render(<SettingsView />);
     expect(await screen.findByText(/Apple Intelligence turned on/)).toBeInTheDocument();
@@ -360,5 +360,49 @@ describe("v0.4 dashboard", () => {
   it("shows the saved reason when a summary failed", () => {
     render(<MeetingPlayer meeting={meeting(1, { transcript: "done", summary: "failed", summaryError: "Apple's on-device model declined to summarize this meeting." })} onDeleted={vi.fn()} />);
     expect(screen.getByText(/declined to summarize/)).toBeInTheDocument();
+  });
+});
+
+describe("open models and sharing", () => {
+  it("chooses open-model engines; an engine this Mac can't run is disabled with the reason", async () => {
+    const calls = mockFetch({
+      "GET /api/settings": () => json(DEFAULT_SETTINGS),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [], whisperLanguages: ["hi", "en"],
+        engines: { whisper: null, qwen: "The open summary model needs at least 8 GB of memory." } }),
+      "PUT /api/settings": (init) => json(JSON.parse(String(init?.body))),
+    });
+    render(<SettingsView />);
+    await screen.findByText(/needs at least 8 GB/);
+    expect(screen.getByRole("option", { name: /Qwen3/ })).toBeDisabled();
+    await userEvent.selectOptions(screen.getByLabelText("Transcription engine"), "whisper");
+    expect(screen.getByRole("option", { name: "Detect automatically" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Hindi" })).toBeInTheDocument(); // Whisper's own list, any macOS
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Saved");
+    expect(JSON.parse(calls.at(-1)!.body!).transcription.engine).toBe("whisper");
+  });
+
+  it("shares a smaller video copy from the Share menu and shows its progress", async () => {
+    const calls = mockFetch({
+      [`POST /api/meetings/${meeting(1).id}/share`]: () => json({ state: "exporting" }, { status: 202 }),
+    });
+    const { rerender } = render(<MeetingPlayer meeting={meeting(1)} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /Share/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Video/ }));
+    await waitFor(() => expect(calls.find((c) => c.method === "POST")?.body).toBe(JSON.stringify({ what: "video" })));
+    rerender(<MeetingPlayer meeting={meeting(1)} share={{ type: "share", id: meeting(1).id, state: "exporting", percent: 42 }} onDeleted={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Making a smaller copy… 42%/ })).toBeDisabled();
+    const failed = { type: "share", id: meeting(1).id, state: "failed", error: "Writing the copy failed." } as const;
+    rerender(<MeetingPlayer meeting={meeting(1)} share={failed} onDeleted={vi.fn()} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("Writing the copy failed.");
+    await userEvent.click(screen.getByRole("button", { name: /Share/ }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /Original/ }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull()); // a new share hides the old failure
+  });
+
+  it("offers the summary in the Share menu only when there is one", async () => {
+    render(<MeetingPlayer meeting={meeting(1, { transcript: "done", summary: "done" })} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /Share/ }));
+    expect(await screen.findByRole("menuitem", { name: "Summary" })).toBeInTheDocument();
   });
 });

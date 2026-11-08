@@ -1,7 +1,11 @@
-// Transcribes (SpeechTranscriber) and summarizes (Foundation Models) recordings on this Mac (macOS 26+).
+// Transcribes and summarizes recordings on this Mac, with Apple's models (macOS 26+) or open
+// models from Hugging Face (OpenModels.swift), and makes share copies. The daemon runs it at
+// background priority, only when the Mac is idle and plugged in (share copies: on request).
 //
-//   MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale en_US]
-//   MeetingRecorderTranscriber --summarize <meeting dir>        (see Summarizer.swift)
+//   MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale en_US] [--engine whisper --models <dir>]
+//   MeetingRecorderTranscriber --summarize <meeting dir> [--engine qwen --models <dir>]   (Summarizer.swift)
+//   MeetingRecorderTranscriber --export <recording.mp4> <share.mp4>                       (Exporter.swift)
+//   MeetingRecorderTranscriber --capabilities    {"locales":[…],"whisperLanguages":[…],"whisper":reason|null,"qwen":reason|null}
 //
 //   recording.mp4 ── audio track 1 (system: "Others") ─┐  AVAssetReader → analyzer's PCM format
 //                └─ audio track 2 (mic: "You")       ─┴─▶ SpeechAnalyzer + SpeechTranscriber ─▶ segments
@@ -12,7 +16,6 @@
 // Exit codes: 0 done · 2 bad input · 3 unavailable on this Mac (OS, language, Apple Intelligence off)
 //             4 failed (worth retrying) · 5 not ready yet (e.g. model still downloading: retry later)
 //             6 failed for good on this input (e.g. the model declined): don't retry
-//   MeetingRecorderTranscriber --list-locales     JSON array of supported language ids
 import AVFoundation
 import AgentCore
 import Foundation
@@ -32,36 +35,97 @@ func fail(_ code: Int32, _ message: String) -> Never {
 
 let args = CommandLine.arguments
 
-if args.count >= 2, args[1] == "--list-locales" {
-    guard #available(macOS 26.0, *) else { print("[]"); exit(0) }
-    Task {
-        let ids = await SpeechTranscriber.supportedLocales.map(\.identifier).sorted()
-        print(String(data: (try? JSONSerialization.data(withJSONObject: ids)) ?? Data("[]".utf8), encoding: .utf8)!)
-        exit(0)
-    }
-    dispatchMain()
+func option(_ name: String) -> String? {
+    args.firstIndex(of: name).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
 }
+let engine = option("--engine") ?? "apple"
+let modelsDir = URL(fileURLWithPath: option("--models") ?? NSString(string: "~/.meeting-recorder/models").expandingTildeInPath)
 
-if args.count >= 3, args[1] == "--summarize" {
-    guard #available(macOS 26.0, *) else { fail(3, "Summaries need macOS 26 or later.") }
+/// Runs one async job and exits with its code (errors: 4, worth retrying).
+func runJob(_ failure: String, _ body: @escaping @Sendable () async throws -> [String: Any]) -> Never {
     Task {
         do {
-            try await Summarizer.run(directory: URL(fileURLWithPath: args[2]))
-            emit(["done": true])
+            emit(try await body())
             exit(0)
         } catch {
-            fail(4, "Summary failed: \(error.localizedDescription)")
+            fail(4, "\(failure): \(error.localizedDescription)")
         }
     }
     dispatchMain()
 }
 
+if args.count >= 2, args[1] == "--capabilities" {
+    runJob("Capabilities failed") {
+        var locales: [String] = []
+        if #available(macOS 26.0, *) { locales = await SpeechTranscriber.supportedLocales.map(\.identifier).sorted() }
+        return ["locales": locales, "whisperLanguages": OpenModels.whisperLanguages,
+                "whisper": OpenModels.whisperUnavailable ?? NSNull(), "qwen": OpenModels.qwenUnavailable ?? NSNull()]
+    }
+}
+
+if args.count >= 4, args[1] == "--export" {
+    runJob("Making the copy failed") {
+        try await Exporter.run(input: URL(fileURLWithPath: args[2]), output: URL(fileURLWithPath: args[3]))
+        return ["done": true]
+    }
+}
+
+if args.count >= 3, args[1] == "--summarize" {
+    let directory = URL(fileURLWithPath: args[2])
+    if engine == "qwen" {
+        if let reason = OpenModels.qwenUnavailable { fail(3, reason) }
+        runJob("Summary failed") {
+            let runtime = try await OpenModels.qwenRuntime(models: modelsDir)
+            try await Summarizer.run(directory: directory, model: QwenSummaryModel(binary: runtime.binary, model: runtime.model))
+            return ["done": true]
+        }
+    }
+    guard #available(macOS 26.0, *) else { fail(3, "Summaries with Apple's model need macOS 26 or later.") }
+    AppleSummaryModel.checkAvailable()
+    runJob("Summary failed") {
+        try await Summarizer.run(directory: directory, model: AppleSummaryModel())
+        return ["done": true]
+    }
+}
+
 guard args.count >= 3 else { fail(2, "usage: MeetingRecorderTranscriber <recording.mp4> <output dir> [--locale id]") }
 let input = URL(fileURLWithPath: args[1])
 let outputDir = URL(fileURLWithPath: args[2])
-let localeId = args.firstIndex(of: "--locale").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
+let localeId = option("--locale")
 
-guard #available(macOS 26.0, *) else { fail(3, "Transcription needs macOS 26 or later.") }
+/// Whisper path: the same per-track PCM and clean-up as Apple's, a different recognizer.
+func transcribeWithWhisper() async throws -> Transcript {
+    let asset = AVURLAsset(url: input)
+    let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+    guard !audioTracks.isEmpty else { fail(2, "The recording has no audio.") }
+    let duration = try await asset.load(.duration).seconds
+    let recognizer = try await WhisperTrackRecognizer(models: modelsDir, localeId: localeId)
+    let labels = Transcript.speakerLabels(trackCount: audioTracks.count)
+    let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("mr-transcribe-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    var segments: [Transcript.Segment] = []
+    for (index, track) in audioTracks.enumerated() {
+        emit(["percent": index * 100 / audioTracks.count])
+        let pcm: URL
+        do { pcm = try await extractPCM(track, of: asset, to: scratch.appendingPathComponent("track\(index).caf")) }
+        catch { throw StepError(step: "reading audio track \(index + 1)", underlying: error) }
+        do { segments += try await recognizer.recognize(pcm, speaker: labels[index]) }
+        catch { throw StepError(step: "transcribing audio track \(index + 1)", underlying: error) }
+    }
+    return Transcript(language: recognizer.language ?? "auto", durationSec: duration, segments: TranscriptCleanup.clean(segments))
+}
+
+if engine == "whisper" {
+    if let reason = OpenModels.whisperUnavailable { fail(3, reason) }
+    runJob("Transcription failed") {
+        let transcript = try await transcribeWithWhisper()
+        try transcript.write(to: outputDir)
+        return ["done": true, "segments": transcript.segments.count]
+    }
+}
+
+guard #available(macOS 26.0, *) else { fail(3, "Transcription with Apple's model needs macOS 26 or later.") }
 
 @available(macOS 26.0, *)
 func transcribe() async throws -> Transcript {
@@ -131,7 +195,6 @@ struct StepError: LocalizedError {
 
 /// Decodes one audio track to 16-bit, 16 kHz mono PCM in a temporary file, buffer by buffer.
 /// AVAssetReader resamples and downmixes; nothing is re-encoded lossily and memory stays flat.
-@available(macOS 26.0, *)
 func extractPCM(_ track: AVAssetTrack, of asset: AVAsset, to url: URL) async throws -> URL {
     guard let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true) else {
         throw CocoaError(.fileWriteUnknown)

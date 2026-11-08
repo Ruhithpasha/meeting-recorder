@@ -124,11 +124,34 @@ export default function SettingsView() {
               onCheckedChange={(on) => transcription({ summarize: on })} />
           </div>
           <div className="grid gap-2">
+            <Label htmlFor="engine">Transcription engine</Label>
+            <NativeSelect id="engine" className="w-full" value={settings.transcription.engine} disabled={!settings.transcription.enabled}
+              onChange={(e) => transcription({ engine: e.target.value as Settings["transcription"]["engine"] })}>
+              <NativeSelectOption value="apple">Apple (built in, no download)</NativeSelectOption>
+              <NativeSelectOption value="whisper" disabled={!!jobs?.engines.whisper}>Whisper large-v3 turbo (more accurate, 632 MB download)</NativeSelectOption>
+            </NativeSelect>
+            {jobs?.engines.whisper && <p className="text-xs text-muted-foreground">{jobs.engines.whisper}</p>}
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="summary-engine">Summary engine</Label>
+            <NativeSelect id="summary-engine" className="w-full" value={settings.transcription.summaryEngine}
+              disabled={!settings.transcription.enabled || !settings.transcription.summarize}
+              onChange={(e) => transcription({ summaryEngine: e.target.value as Settings["transcription"]["summaryEngine"] })}>
+              <NativeSelectOption value="apple">Apple Intelligence (built in, no download)</NativeSelectOption>
+              <NativeSelectOption value="qwen" disabled={!!jobs?.engines.qwen}>Qwen3 1.7B open model (1.8 GB download)</NativeSelectOption>
+            </NativeSelect>
+            {jobs?.engines.qwen && <p className="text-xs text-muted-foreground">{jobs.engines.qwen}</p>}
+            <p className="text-xs text-muted-foreground">
+              Open models download once from Hugging Face, then run only on this Mac, at low priority, when it's idle and plugged in.
+            </p>
+          </div>
+          <div className="grid gap-2">
             <Label htmlFor="language">Meeting language</Label>
             <NativeSelect id="language" className="w-full" value={settings.transcription.language} disabled={!settings.transcription.enabled}
               onChange={(e) => transcription({ language: e.target.value })}>
-              <NativeSelectOption value="auto">Same as this Mac</NativeSelectOption>
-              {languageOptions(jobs?.languages ?? [], settings.transcription.language).map((id) => (
+              <NativeSelectOption value="auto">{settings.transcription.engine === "whisper" ? "Detect automatically" : "Same as this Mac"}</NativeSelectOption>
+              {languageOptions((settings.transcription.engine === "whisper" ? jobs?.whisperLanguages : jobs?.languages) ?? [],
+                settings.transcription.language).map((id) => (
                 <NativeSelectOption key={id} value={id}>{languageName(id)}</NativeSelectOption>
               ))}
             </NativeSelect>

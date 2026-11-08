@@ -30,6 +30,7 @@ agent ◀─stdout── daemon    DaemonCommand  discriminated by "cmd"
 | daemon → agent | `stop` | Finish the recording. |
 | daemon → agent | `state` | Menu-bar state and label. |
 | daemon → agent | `openUrl` | Open the local dashboard (only `http://127.0.0.1:<port>/` URLs are valid). |
+| daemon → agent | `share` | Show the macOS share sheet for `<meetings>/<meetingId>/<file>`, where `file` is one of `recording.mp4`, `share.mp4`, `summary.md`. No path is sent: the agent builds it. |
 
 ## Versioning
 

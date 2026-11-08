@@ -18,7 +18,9 @@ export class SettingsRepository {
       // Defaults fill fields added in newer versions; only known transcription fields are kept
       // (older files had a whisper "model" field); anything still invalid resets to defaults.
       const t = { ...DEFAULT_SETTINGS.transcription, ...raw.transcription };
-      const merged = { ...DEFAULT_SETTINGS, ...raw, transcription: { enabled: t.enabled, summarize: t.summarize, language: t.language } };
+      const merged = { ...DEFAULT_SETTINGS, ...raw, transcription: {
+        enabled: t.enabled, summarize: t.summarize, language: t.language, engine: t.engine, summaryEngine: t.summaryEngine,
+      } };
       this.cached = isValidSettings(merged) ? merged : structuredClone(DEFAULT_SETTINGS);
     } catch {
       this.cached = structuredClone(DEFAULT_SETTINGS);

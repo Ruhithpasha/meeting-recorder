@@ -13,6 +13,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let permissions = Permissions()
     private let power = PowerMonitor()
     private let dashboard = DashboardWindow()
+    private var meetingsDir = ""
     /// launchd starts us with --background at login: stay in the menu bar. Opened by the user
     /// (Finder, Spotlight, Launchpad, `meeting-recorder open`): show the dashboard window.
     private let launchedInBackground = CommandLine.arguments.contains("--background")
@@ -72,6 +73,7 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func start(with config: AgentConfig) {
+        meetingsDir = config.meetingsDir
         let transcriber = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MeetingRecorderTranscriber").path
         let host = DaemonHost(config: config, transcriberPath: FileManager.default.isExecutableFile(atPath: transcriber) ? transcriber : nil)
         daemon = host
@@ -140,6 +142,11 @@ final class AppController: NSObject, NSApplicationDelegate {
             if quitting, c.status == .idle { NSApp.terminate(nil) }
         case .openUrl(let c):
             if let url = URL(string: c.url) { dashboard.show(url: url) } // in-app window, not a browser
+        case .share(let c):
+            // Path built here from the validated id and a fixed file name, never taken from the daemon.
+            let file = URL(fileURLWithPath: meetingsDir).appendingPathComponent(c.meetingId).appendingPathComponent(c.file.rawValue)
+            guard FileManager.default.fileExists(atPath: file.path) else { return Log.warn("share: \(c.file.rawValue) missing") }
+            dashboard.share(file)
         }
     }
 

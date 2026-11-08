@@ -142,6 +142,23 @@ check(TranscriptChunker.estimatedTokens("abcdefgh") == 2 && TranscriptChunker.es
 let cjk = TranscriptChunker.chunks(Array(repeating: String(repeating: "会", count: 300), count: 20), maxTokens: 2000)
 check(cjk.count >= 3 && cjk.allSatisfy { TranscriptChunker.estimatedTokens($0) <= 2000 }, "CJK transcripts are split so each part fits the window")
 
+// MARK: Open-model text
+check(OpenModelText.whisperLanguage("hi_IN") == "hi" && OpenModelText.whisperLanguage("auto") == nil && OpenModelText.whisperLanguage(nil) == nil, "settings language -> Whisper code")
+check(OpenModelText.cleanWhisper("<|startoftranscript|><|en|><|0.00|> Good  morning.<|3.52|>") == "Good morning.", "Whisper special tokens stripped")
+let qwenOut = #"{"overview":"Sync.","keyPoints":["a"],"decisions":[],"actionItems":["Priya: docs"]} [end of text]"#
+check(OpenModelText.parseSummary(qwenOut) == MeetingSummary(overview: "Sync.", keyPoints: ["a"], decisions: [], actionItems: ["Priya: docs"]), "Qwen JSON summary parsed despite trailing text")
+check(OpenModelText.parseSummary("no json") == nil && OpenModelText.parseSummary(#"{"keyPoints":[]}"#) == nil, "bad summary output rejected")
+check(OpenModelText.parseNotes(#"{"points":["one","two"]}"#) == "- one\n- two", "Qwen notes parsed")
+check(OpenModelText.chatPrompt(system: "S", user: "U").hasSuffix("<think>\n\n</think>\n\n") && OpenModelText.chatPrompt(system: "S", user: "U").contains("U /no_think"), "Qwen prompt has thinking off")
+
+// MARK: Share command
+let shareValidator = CommandValidator()
+if case .success(.share(let c)) = shareValidator.decode(#"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"share.mp4"}"#) { check(c.file == .shareMp4, "share decoded") } else { check(false, "share accepted") }
+for bad in [#"{"cmd":"share","meetingId":"../../etc","file":"share.mp4"}"#, #"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"/etc/passwd"}"#,
+            #"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"share.mp4","path":"/tmp"}"#] {
+    if case .failure = shareValidator.decode(bad) { passed += 1 } else { check(false, "share rejected: \(bad)") }
+}
+
 // MARK: Transcript cleanup
 typealias Seg = Transcript.Segment
 let echoed = [Seg(start: 10, end: 14, speaker: "Others", text: "We should ship the release on Friday"),

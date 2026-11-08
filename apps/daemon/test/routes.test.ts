@@ -313,6 +313,20 @@ describe("reveal in Finder", () => {
   });
 });
 
+describe("share API", () => {
+  it("POST share opens the share sheet for the original; validates what to share", async () => {
+    const { app, id, agent } = await withMeeting();
+    const res = await app.inject({ method: "POST", url: `/api/meetings/${id}/share`, headers: AUTH, payload: { what: "original" } });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ state: "shared" });
+    expect(agent.last("share")).toEqual({ cmd: "share", meetingId: id, file: "recording.mp4" });
+    for (const payload of [{ what: "../../etc/passwd" }, { what: "original", path: "/tmp/x" }, {}]) {
+      expect((await app.inject({ method: "POST", url: `/api/meetings/${id}/share`, headers: AUTH, payload })).statusCode).toBe(400);
+    }
+    expect([401, 403]).toContain((await app.inject({ method: "POST", url: `/api/meetings/${id}/share`, payload: { what: "original" } })).statusCode); // no session
+  });
+});
+
 describe("summary API", () => {
   it("GET summary: 404 until done, then the JSON; POST summarize needs a transcript", async () => {
     const { app, id, container, dirs } = await withMeeting();
@@ -334,7 +348,7 @@ describe("settings migration", () => {
     writeFileSync(join(dirs.stateDir, "settings.json"), JSON.stringify({ autoRecord: false, quality: "1080p15", transcription: { enabled: true, model: "base" }, extraApps: [] }));
     const { SettingsRepository } = await import("../src/repositories/SettingsRepository.ts");
     const repo = new SettingsRepository(join(dirs.stateDir, "settings.json"));
-    expect(await repo.load()).toEqual({ autoRecord: false, quality: "1080p15", transcription: { enabled: true, summarize: true, language: "auto" }, extraApps: [] });
+    expect(await repo.load()).toEqual({ autoRecord: false, quality: "1080p15", transcription: { enabled: true, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" }, extraApps: [] });
   });
 });
 
@@ -342,7 +356,8 @@ describe("jobs info and summary.md", () => {
   it("GET /api/jobs reports availability and languages (empty without a transcriber)", async () => {
     const { app } = await makeApp();
     const res = await app.inject({ url: "/api/jobs", headers: AUTH });
-    expect(res.json()).toEqual({ transcriptUnavailable: "Transcription isn't installed.", summaryUnavailable: expect.stringMatching(/isn't installed/), languages: [] });
+    expect(res.json()).toEqual({ transcriptUnavailable: "Transcription isn't installed.", summaryUnavailable: expect.stringMatching(/isn't installed/), languages: [], whisperLanguages: [],
+      engines: { whisper: "Transcription isn't installed.", qwen: "Transcription isn't installed." } });
   });
 
   it("GET summary.md serves the saved Markdown (one source for Copy)", async () => {

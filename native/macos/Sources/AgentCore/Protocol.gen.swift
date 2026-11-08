@@ -24,6 +24,7 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
     public let permissionEvent: PermissionEvent?
     public let powerEvent: PowerEvent?
     public let recordingEvent: RecordingEvent?
+    public let shareCommand: ShareCommand?
     public let startCommand: StartCommand?
     public let stateCommand: StateCommand?
     public let stopCommand: StopCommand?
@@ -36,19 +37,21 @@ public struct ProtocolRoot: Codable, Equatable, Sendable {
         case permissionEvent = "permissionEvent"
         case powerEvent = "powerEvent"
         case recordingEvent = "recordingEvent"
+        case shareCommand = "shareCommand"
         case startCommand = "startCommand"
         case stateCommand = "stateCommand"
         case stopCommand = "stopCommand"
         case trayEvent = "trayEvent"
     }
 
-    public init(helloEvent: HelloEvent?, micEvent: MicEvent?, openUrlCommand: OpenUrlCommand?, permissionEvent: PermissionEvent?, powerEvent: PowerEvent?, recordingEvent: RecordingEvent?, startCommand: StartCommand?, stateCommand: StateCommand?, stopCommand: StopCommand?, trayEvent: TrayEvent?) {
+    public init(helloEvent: HelloEvent?, micEvent: MicEvent?, openUrlCommand: OpenUrlCommand?, permissionEvent: PermissionEvent?, powerEvent: PowerEvent?, recordingEvent: RecordingEvent?, shareCommand: ShareCommand?, startCommand: StartCommand?, stateCommand: StateCommand?, stopCommand: StopCommand?, trayEvent: TrayEvent?) {
         self.helloEvent = helloEvent
         self.micEvent = micEvent
         self.openUrlCommand = openUrlCommand
         self.permissionEvent = permissionEvent
         self.powerEvent = powerEvent
         self.recordingEvent = recordingEvent
+        self.shareCommand = shareCommand
         self.startCommand = startCommand
         self.stateCommand = stateCommand
         self.stopCommand = stopCommand
@@ -81,6 +84,7 @@ public extension ProtocolRoot {
         permissionEvent: PermissionEvent?? = nil,
         powerEvent: PowerEvent?? = nil,
         recordingEvent: RecordingEvent?? = nil,
+        shareCommand: ShareCommand?? = nil,
         startCommand: StartCommand?? = nil,
         stateCommand: StateCommand?? = nil,
         stopCommand: StopCommand?? = nil,
@@ -93,6 +97,7 @@ public extension ProtocolRoot {
             permissionEvent: permissionEvent ?? self.permissionEvent,
             powerEvent: powerEvent ?? self.powerEvent,
             recordingEvent: recordingEvent ?? self.recordingEvent,
+            shareCommand: shareCommand ?? self.shareCommand,
             startCommand: startCommand ?? self.startCommand,
             stateCommand: stateCommand ?? self.stateCommand,
             stopCommand: stopCommand ?? self.stopCommand,
@@ -731,6 +736,83 @@ public enum RecordingState: String, Codable, Equatable, Sendable {
 
 public enum RecordingEventType: String, Codable, Equatable, Sendable {
     case recording = "recording"
+}
+
+//
+// Hashable or Equatable:
+// The compiler will not be able to synthesize the implementation of Hashable or Equatable
+// for types that require the use of JSONAny, nor will the implementation of Hashable be
+// synthesized for types that have collections (such as arrays or dictionaries).
+
+/// Show the macOS share sheet for one file of a meeting. The agent builds the path itself
+/// (meetings folder + id + file), so the daemon can't point it anywhere else.
+// MARK: - ShareCommand
+public struct ShareCommand: Codable, Equatable, Sendable {
+    public let cmd: ShareCommandCmd
+    public let file: ShareFile
+    public let meetingId: String
+
+    public enum CodingKeys: String, CodingKey {
+        case cmd = "cmd"
+        case file = "file"
+        case meetingId = "meetingId"
+    }
+
+    public init(cmd: ShareCommandCmd, file: ShareFile, meetingId: String) {
+        self.cmd = cmd
+        self.file = file
+        self.meetingId = meetingId
+    }
+}
+
+// MARK: ShareCommand convenience initializers and mutators
+
+public extension ShareCommand {
+    init(data: Data) throws {
+        self = try newJSONDecoder().decode(ShareCommand.self, from: data)
+    }
+
+    init(_ json: String, using encoding: String.Encoding = .utf8) throws {
+        guard let data = json.data(using: encoding) else {
+            throw NSError(domain: "JSONDecoding", code: 0, userInfo: nil)
+        }
+        try self.init(data: data)
+    }
+
+    init(fromURL url: URL) throws {
+        try self.init(data: try Data(contentsOf: url))
+    }
+
+    func with(
+        cmd: ShareCommandCmd? = nil,
+        file: ShareFile? = nil,
+        meetingId: String? = nil
+    ) -> ShareCommand {
+        return ShareCommand(
+            cmd: cmd ?? self.cmd,
+            file: file ?? self.file,
+            meetingId: meetingId ?? self.meetingId
+        )
+    }
+
+    func jsonData() throws -> Data {
+        return try newJSONEncoder().encode(self)
+    }
+
+    func jsonString(encoding: String.Encoding = .utf8) throws -> String? {
+        return String(data: try self.jsonData(), encoding: encoding)
+    }
+}
+
+public enum ShareCommandCmd: String, Codable, Equatable, Sendable {
+    case share = "share"
+}
+
+/// recording.mp4 (original), share.mp4 (smaller copy with one mixed audio track), summary.md.
+public enum ShareFile: String, Codable, Equatable, Sendable {
+    case recordingMp4 = "recording.mp4"
+    case shareMp4 = "share.mp4"
+    case summaryMd = "summary.md"
 }
 
 //

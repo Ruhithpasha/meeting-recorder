@@ -34,6 +34,9 @@
     },
     "openUrlCommand": {
       "$ref": "#/definitions/OpenUrlCommand"
+    },
+    "shareCommand": {
+      "$ref": "#/definitions/ShareCommand"
     }
   },
   "definitions": {
@@ -77,6 +80,9 @@
         },
         {
           "$ref": "#/definitions/OpenUrlCommand"
+        },
+        {
+          "$ref": "#/definitions/ShareCommand"
         }
       ],
       "discriminator": {
@@ -447,6 +453,35 @@
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}-[0-9]{2}_[a-z0-9-]{1,40}$",
       "description": "Meeting folder name: <local date>_<local time>_<slug>. Safe as a single path component."
+    },
+    "ShareCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cmd",
+        "meetingId",
+        "file"
+      ],
+      "description": "Show the macOS share sheet for one file of a meeting. The agent builds the path itself (meetings folder + id + file), so the daemon can't point it anywhere else.",
+      "properties": {
+        "cmd": {
+          "const": "share"
+        },
+        "meetingId": {
+          "$ref": "#/definitions/MeetingId"
+        },
+        "file": {
+          "$ref": "#/definitions/ShareFile"
+        }
+      }
+    },
+    "ShareFile": {
+      "enum": [
+        "recording.mp4",
+        "share.mp4",
+        "summary.md"
+      ],
+      "description": "recording.mp4 (original), share.mp4 (smaller copy with one mixed audio track), summary.md."
     }
   },
   "x-protocolVersion": 1

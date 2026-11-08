@@ -15,6 +15,7 @@ import { RecordingService } from "./services/RecordingService.ts";
 import { RecoveryService } from "./services/RecoveryService.ts";
 import { SettingsService } from "./services/SettingsService.ts";
 import { StatusService } from "./services/StatusService.ts";
+import { ShareService } from "./services/ShareService.ts";
 import { TranscriptionService, type Spawner } from "./services/TranscriptionService.ts";
 
 export interface ContainerOptions {
@@ -31,6 +32,26 @@ export interface ContainerOptions {
   /** MeetingRecorderTranscriber inside the app bundle (MR_TRANSCRIBER); null disables transcription. */
   transcriberPath?: string | null;
   spawner?: Spawner;
+}
+
+export interface Capabilities { locales: string[]; whisperLanguages: string[]; whisper: string | null; qwen: string | null }
+
+/** Narrow parse of `MeetingRecorderTranscriber --capabilities` output (null if malformed). */
+export function parseCapabilities(stdout: string): Capabilities | null {
+  try {
+    const raw = JSON.parse(stdout) as Record<string, unknown>;
+    const reason = (v: unknown) => (typeof v === "string" ? v.slice(0, 200) : null);
+    if (!Array.isArray(raw.locales)) return null;
+    const ids = (v: unknown, pattern: RegExp) => (Array.isArray(v) ? v : []).filter((l): l is string => typeof l === "string" && pattern.test(l));
+    return {
+      locales: ids(raw.locales, /^[a-z]{2,3}(_[A-Z]{2})?$/),
+      whisperLanguages: ids(raw.whisperLanguages, /^[a-z]{2,3}$/),
+      whisper: reason(raw.whisper),
+      qwen: reason(raw.qwen),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function createContainer(o: ContainerOptions) {
@@ -58,25 +79,27 @@ export async function createContainer(o: ContainerOptions) {
   const meetings = new MeetingService(repo, recording, bus);
   const transcription = new TranscriptionService({
     repo, bus, recording, log: o.log, settings: () => settings.get(),
-    transcriberPath: o.transcriberPath ?? null, spawner: o.spawner,
+    transcriberPath: o.transcriberPath ?? null, modelsDir: join(o.stateDir, "models"), spawner: o.spawner,
   });
   settings.onChange = () => transcription.settingsChanged();
+  const share = new ShareService({ repo, bus, agent: o.agent, recording, log: o.log, transcriberPath: o.transcriberPath ?? null, spawner: o.spawner });
   await transcription.init();
 
-  /** Languages the on-device transcriber supports (asked once, then cached). */
-  let languages: Promise<string[]> | null = null;
-  // Cached only when it worked: a slow first call (speech service still starting) is retried next time.
-  const listLanguages = () => (languages ??= o.transcriberPath
-    ? new Promise<string[]>((resolve) => {
-        execFile(o.transcriberPath!, ["--list-locales"], { timeout: 15_000 }, (error, stdout) => {
-          let list: string[] = [];
-          try { if (!error) list = (JSON.parse(stdout) as string[]).filter((l) => /^[a-z]{2,3}(_[A-Z]{2})?$/.test(l)); }
-          catch { /* treated as a failed call */ }
-          if (!list.length) languages = null;
-          resolve(list);
+  /** What the transcriber can do here: Apple's languages, and why an open-model engine can't run
+   *  (e.g. Intel Mac, too little memory). Asked once; cached only when the call worked, so a slow
+   *  first call (speech service still starting) is retried next time. */
+  const noCapabilities: Capabilities = { locales: [], whisperLanguages: [], whisper: "Transcription isn't installed.", qwen: "Transcription isn't installed." };
+  const unknown = "Couldn't check this Mac yet. Open Settings again in a moment.";
+  let capabilities: Promise<Capabilities> | null = null;
+  const getCapabilities = () => (capabilities ??= o.transcriberPath
+    ? new Promise<Capabilities>((resolve) => {
+        execFile(o.transcriberPath!, ["--capabilities"], { timeout: 15_000 }, (error, stdout) => {
+          const parsed = error ? null : parseCapabilities(stdout);
+          if (!parsed) capabilities = null;
+          resolve(parsed ?? { ...noCapabilities, whisper: unknown, qwen: unknown }); // unknown ≠ available
         });
       })
-    : Promise.resolve([]));
+    : Promise.resolve(noCapabilities));
   const onAgentEvent = createAgentEventHandler({
     agent: o.agent, recording, detection, recovery, status, bus, log: o.log,
     dashboardUrl: o.dashboardUrl, openFolder: o.openFolder,
@@ -84,9 +107,9 @@ export async function createContainer(o: ContainerOptions) {
   });
 
   return {
-    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, onAgentEvent,
+    bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, share, onAgentEvent,
     reveal: o.reveal ?? (() => {}),
-    listLanguages,
+    capabilities: getCapabilities,
     start() {
       repo.startWatching();
       disk.start(recording, status);
@@ -96,6 +119,7 @@ export async function createContainer(o: ContainerOptions) {
       disk.stop();
       detection.dispose();
       transcription.dispose();
+      share.dispose();
     },
   };
 }

@@ -12,6 +12,7 @@ export interface ProtocolRoot {
     permissionEvent?: PermissionEvent;
     powerEvent?:      PowerEvent;
     recordingEvent?:  RecordingEvent;
+    shareCommand?:    ShareCommand;
     startCommand?:    StartCommand;
     stateCommand?:    StateCommand;
     stopCommand?:     StopCommand;
@@ -89,6 +90,21 @@ export interface AgentError {
 export type AgentErrorCode = "permission" | "capture" | "writer" | "unknown";
 
 export type RecordingState = "started" | "stopped" | "error";
+
+/**
+ * Show the macOS share sheet for one file of a meeting. The agent builds the path itself
+ * (meetings folder + id + file), so the daemon can't point it anywhere else.
+ */
+export interface ShareCommand {
+    cmd:       "share";
+    file:      ShareFile;
+    meetingId: string;
+}
+
+/**
+ * recording.mp4 (original), share.mp4 (smaller copy with one mixed audio track), summary.md.
+ */
+export type ShareFile = "recording.mp4" | "share.mp4" | "summary.md";
 
 export interface StartCommand {
     cmd:       "start";

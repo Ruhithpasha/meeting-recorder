@@ -35,6 +35,32 @@ export const NOT_READY_RETRY_MS = 10 * 60_000;
 export const timeoutMs = (durationSec: number | null) => ((durationSec ?? 3600) * 2 + 600) * 1000;
 
 export type Spawner = (command: string, args: string[]) => ChildProcess;
+
+/** Background priority (efficiency cores, low I/O priority) so jobs never slow the Mac down.
+ *  taskpolicy execs the program, so the pid is the transcriber's own. It leads its own process
+ *  group and kill() signals the whole group, so helpers it starts (llama.cpp) stop with it, even
+ *  on SIGKILL. stderr is discarded: an unread pipe fills up and would block the transcriber. */
+export const backgroundSpawn: Spawner = (cmd, args) => {
+  const child = spawn("/usr/sbin/taskpolicy", ["-b", cmd, ...args], { stdio: ["ignore", "pipe", "ignore"], detached: true });
+  child.kill = (signal: NodeJS.Signals | number = "SIGTERM") => {
+    try {
+      process.kill(-child.pid!, signal);
+      return true;
+    } catch {
+      return false; // already gone
+    }
+  };
+  return child;
+};
+
+/** Command-line arguments for one job (see MeetingRecorderTranscriber's usage). */
+export function jobArgs(kind: JobKind, recording: string, dir: string, t: Settings["transcription"], modelsDir?: string): string[] {
+  const engine = kind === "transcript" ? t.engine : t.summaryEngine;
+  const open = engine !== "apple" ? ["--engine", engine, ...(modelsDir ? ["--models", modelsDir] : [])] : [];
+  return kind === "transcript"
+    ? [recording, dir, ...(t.language === "auto" ? [] : ["--locale", t.language]), ...open]
+    : ["--summarize", dir, ...open];
+}
 export type JobKind = "transcript" | "summary";
 
 export interface TranscriptionDeps {
@@ -45,6 +71,8 @@ export interface TranscriptionDeps {
   log: Logger;
   /** Path of MeetingRecorderTranscriber (inside the app bundle); null when not installed. */
   transcriberPath: string | null;
+  /** Where open models are downloaded once (Hugging Face) and kept. */
+  modelsDir?: string;
   spawner?: Spawner;
   now?: () => number;
 }
@@ -94,6 +122,8 @@ export class TranscriptionService {
       } else if (event.type === "meetingDeleted") {
         this.pending.delete(event.id);
         if (this.running?.id === event.id) this.cancelRunning();
+      } else if (event.type !== "status") {
+        return; // share progress: not ours
       } else if (event.status.state !== "idle") {
         this.cancelRunning(); // a recording is starting: don't compete with it
       } else {
@@ -207,23 +237,26 @@ export class TranscriptionService {
     // never loses a good transcript or summary. Only a file written after this point counts.
     job.startedAt = Date.now(); // compared with file times, so the real clock
     await this.setStatus(meeting, job.kind, "running", null);
-    const language = this.d.settings().transcription.language;
-    const args = job.kind === "transcript"
-      ? [this.d.repo.recordingPath(meeting.id), dir, ...(language === "auto" ? [] : ["--locale", language])]
-      : ["--summarize", dir];
-    // stderr is discarded: an unread pipe fills up and would block the transcriber forever.
-    const spawner = this.d.spawner ?? ((cmd, a) => spawn(cmd, a, { stdio: ["ignore", "pipe", "ignore"] }));
+    const args = jobArgs(job.kind, this.d.repo.recordingPath(meeting.id), dir, this.d.settings().transcription, this.d.modelsDir);
+    const spawner = this.d.spawner ?? backgroundSpawn;
     const child = spawner(this.d.transcriberPath!, args);
     job.child = child;
     if (job.cancelled) child.kill("SIGTERM"); // cancelled while we were getting ready
-    const watchdog = setTimeout(() => { job.timedOut = true; child.kill("SIGKILL"); }, timeoutMs(meeting.durationSec));
+    // The time limit starts again after a model download, which can take a while on first use.
+    let watchdog: NodeJS.Timeout | undefined;
+    const arm = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => { job.timedOut = true; child.kill("SIGKILL"); }, timeoutMs(meeting.durationSec));
+    };
+    arm();
 
     let lastError: string | null = null;
     if (child.stdout) {
       createInterface({ input: child.stdout }).on("line", (line) => {
         try {
-          const msg = JSON.parse(line) as { error?: string };
+          const msg = JSON.parse(line) as { error?: string; status?: string };
           if (msg.error) lastError = msg.error;
+          if (msg.status === "downloading") arm();
         } catch { /* ignore non-JSON output */ }
       });
     }

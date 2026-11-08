@@ -1,12 +1,13 @@
+import { Settings as SettingsIcon } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type { ServerEvent, Status } from "@meeting-recorder/shared";
 import { establishSession, type SessionResult } from "@/api/session.ts";
 import { EmptyState, Spinner } from "@/components/ui.tsx";
 import { BrandMark } from "@/components/Waveform.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
 import { MeetingList } from "@/features/meetings/MeetingList.tsx";
-import { MeetingPlayer } from "@/features/meetings/MeetingPlayer.tsx";
+import { MeetingPlayer, type ShareProgress } from "@/features/meetings/MeetingPlayer.tsx";
 import { RecordingBanner } from "@/features/status/RecordingBanner.tsx";
 import { useMeetings } from "@/hooks/useMeetings.ts";
 import { useServerEvents } from "@/hooks/useServerEvents.ts";
@@ -38,11 +39,13 @@ function Dashboard() {
   const [view, setView] = useState<"meetings" | "settings">("meetings");
   const [status, setStatus] = useState<Status | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [shares, setShares] = useState<Record<string, ShareProgress>>({});
   const meetings = useMeetings();
   const { applyEvent } = meetings;
 
   const onEvent = useCallback((event: ServerEvent) => {
     if (event.type === "status") setStatus(event.status);
+    else if (event.type === "share") setShares((s) => ({ ...s, [event.id]: event }));
     else applyEvent(event);
   }, [applyEvent]);
   const connection = useServerEvents(onEvent);
@@ -77,22 +80,25 @@ function Dashboard() {
   const selected = meetings.items.find((m) => m.id === selectedId) ?? null;
   const liveMeeting = status?.meetingId ? meetings.items.find((m) => m.id === status.meetingId) ?? null : null;
 
+  const settingsOpen = view === "settings";
   return (
-    // Tabs spans the whole window: the switch lives in the sidebar, its panels in the main column.
-    <Tabs value={view} onValueChange={(v) => setView(v as typeof view)}
-      className="grid h-full grid-cols-1 gap-0 md:grid-cols-[minmax(290px,340px)_1fr]">
+    <div className="grid h-full grid-cols-1 md:grid-cols-[minmax(290px,340px)_1fr]">
       <aside className="flex min-h-0 flex-col border-b bg-sidebar text-sidebar-foreground md:border-b-0 md:border-r">
-        <header className="flex items-center justify-between gap-2 px-4 pb-2.5 pt-4">
+        <header className="px-4 pb-2.5 pt-4">
           <h1 className="flex items-center gap-2 whitespace-nowrap text-base font-bold"><BrandMark className="text-primary" />Meeting Recorder</h1>
-          <TabsList aria-label="Sections">
-            <TabsTrigger value="meetings">Meetings</TabsTrigger>
-            <TabsTrigger value="settings">Settings</TabsTrigger>
-          </TabsList>
         </header>
         <div className="flex-1 overflow-y-auto px-2.5 pb-4">
-          <MeetingList state={meetings} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setView("meetings"); }}
+          <MeetingList state={meetings} selectedId={settingsOpen ? null : selectedId}
+            onSelect={(id) => { setSelectedId(id); setView("meetings"); }}
             onRetry={meetings.reload} onLoadMore={meetings.loadMore} />
         </div>
+        {/* Settings lives at the bottom of the sidebar, like other Mac apps. */}
+        <footer className="border-t border-sidebar-border p-2.5">
+          <Button variant="ghost" aria-pressed={settingsOpen} onClick={() => setView(settingsOpen ? "meetings" : "settings")}
+            className="w-full justify-start gap-2 aria-pressed:bg-card aria-pressed:shadow-sm aria-pressed:ring-1 aria-pressed:ring-border">
+            <SettingsIcon className="transition-transform duration-300 group-aria-pressed/button:rotate-90" />Settings
+          </Button>
+        </footer>
       </aside>
       <main className="min-w-0 overflow-y-auto">
         <div className="mx-auto max-w-4xl px-4 pb-10 pt-4 md:px-7">
@@ -102,17 +108,17 @@ function Dashboard() {
             </Alert>
           )}
           <RecordingBanner status={status} meeting={liveMeeting} />
-          <TabsContent value="meetings">
-            {/* key: fresh state per meeting, so a pending delete confirmation can't carry over */}
-            <MeetingPlayer key={selected?.id ?? "none"} meeting={selected} onDeleted={() => setSelectedId(null)} />
-          </TabsContent>
-          <TabsContent value="settings">
+          {settingsOpen ? (
             <Suspense fallback={<Spinner label="Loading settings" />}>
               <SettingsView />
             </Suspense>
-          </TabsContent>
+          ) : (
+            // key: fresh state per meeting, so a pending delete confirmation can't carry over
+            <MeetingPlayer key={selected?.id ?? "none"} meeting={selected} share={selected ? shares[selected.id] : undefined}
+              onDeleted={() => setSelectedId(null)} />
+          )}
         </div>
       </main>
-    </Tabs>
+    </div>
   );
 }

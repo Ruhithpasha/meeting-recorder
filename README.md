@@ -49,7 +49,8 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
   - Meetings are grouped by day and searchable.
   - Plays recordings with seeking; transcripts are clickable to jump to a moment.
   - Show in Finder, and delete to the Trash.
-  - Settings: quality (720p or 1080p, at 30 or 15 fps), auto-record, transcription, summaries, the meeting language, extra apps.
+  - Settings (bottom of the sidebar): quality (720p or 1080p, at 30 or 15 fps), auto-record, transcription and summary engines, the meeting language, extra apps.
+  - Share: send the video (a smaller copy), the original or the summary through the Mac's share menu.
   - Follows your Mac's light or dark appearance. A live waveform shows while recording; the menu-bar icon is the same waveform, red and moving while recording.
   - Closing the window doesn't stop recording. To stop Meeting Recorder completely, use "Quit Meeting Recorder" in the menu bar or the app menu.
 - **Files:** one folder per meeting, for example `~/Meetings/2026-11-08_14-30-05_zoom/`:
@@ -57,6 +58,7 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
   - `meta.json`: the meeting's details.
   - `transcript.json` and `transcript.vtt`: the transcript, once it exists.
   - `summary.md` and `summary.json`: the summary, once it exists.
+  - `share.mp4`: the smaller copy, if you shared the video.
 
 ### Transcripts and summaries
 
@@ -76,6 +78,28 @@ After a meeting is saved, Meeting Recorder transcribes it with Apple's on-device
   - Pick the **meeting language** in Settings (for example English (India) or Hindi) if it differs from your Mac's language.
 - Turn either off in Settings.
 
+### Open models (optional)
+
+In Settings you can swap Apple's models for open models from Hugging Face. Each downloads **once** into `~/.meeting-recorder/models` (pinned version, checked against its fingerprint), then runs only on your Mac, at background priority, when it's idle and plugged in. No meeting content is ever uploaded.
+
+| Engine | For | Download | Measured on an M2 (16 GB) |
+|---|---|---|---|
+| Apple (default) | transcripts (macOS 26), summaries (Apple Intelligence) | none | |
+| **Whisper large-v3 turbo** (WhisperKit, Core ML) | transcripts: better with accents and mixed languages; works without macOS 26 | 632 MB | ~290 MB memory; 97 s of speech in 26 s (Neural Engine). The first run takes a few minutes once, to prepare the model. |
+| **Qwen3 1.7B** (llama.cpp) | summaries without Apple Intelligence; reads about 8× more text at a time | 1.8 GB + 17 MB | 1.2–2.4 GB at peak, most of it the model file, which macOS can reclaim; a long meeting summarized in about 30 s. Needs Apple silicon and 8 GB+ of memory. |
+
+Both need a Mac with Apple silicon. With "Meeting language" on automatic, Whisper detects the language itself.
+
+### Sharing a meeting
+
+Each meeting has a **Share** menu that opens the Mac's share sheet (AirDrop, Mail, Messages, and any app that accepts files). Nothing is uploaded by Meeting Recorder.
+
+- **Video:** a smaller 720p copy (about 0.6 GB per hour) with everyone in one audio track, so it sounds right in any player. It's made the first time you share (with the Mac's hardware encoder, at background priority), saved as `share.mp4`, and reused after that.
+- **Original recording:** full quality. It has two audio tracks (others, you); QuickTime plays both, some players only the first.
+- **Summary:** `summary.md`.
+
+Anyone you share a recording with gets everyone's voices and your screen: check that's OK with the people on the call.
+
 ## Recording consent
 
 Laws in many places require **everyone on a call to agree** before it is recorded. Meeting Recorder shows a red menu-bar icon and a notification whenever it records, and it records your **whole display** by default, so anything visible on screen is saved. You are responsible for getting consent and for what you keep.
@@ -85,6 +109,7 @@ Laws in many places require **everyone on a call to agree** before it is recorde
 - **Local only:**
   - The daemon listens only on `127.0.0.1`.
   - The recorder contains no networking code.
+  - The only downloads are the open models, and only if you choose one in Settings: once, from Hugging Face and GitHub, checked against pinned fingerprints. Recordings, transcripts and summaries are never uploaded.
   - A test fails if the daemon ever connects anywhere but loopback.
   - There's no telemetry or auto-updater: updates happen only when you run `meeting-recorder update`.
 - **Lightweight:**

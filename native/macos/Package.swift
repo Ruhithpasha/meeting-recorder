@@ -6,13 +6,19 @@ import PackageDescription
 let package = Package(
     name: "MeetingRecorderAgent",
     platforms: [.macOS(.v15)],
+    // WhisperKit (MIT, Core ML): the optional open transcription engine. Exact version: the
+    // install builds from source, so every Mac gets the same, reviewed code.
+    dependencies: [.package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "0.18.0")],
     targets: [
         // Pure logic: wire protocol, command validation, config, capture math. No UI, no capture.
         .target(name: "AgentCore", path: "Sources/AgentCore"),
         // The menu-bar app: capture, mic detection, permissions, daemon supervision.
         .executableTarget(name: "MeetingRecorderAgent", dependencies: ["AgentCore"], path: "Sources/MeetingRecorderAgent"),
-        // On-device transcription (macOS 26+ SpeechTranscriber), spawned by the daemon when idle.
-        .executableTarget(name: "MeetingRecorderTranscriber", dependencies: ["AgentCore"], path: "Sources/MeetingRecorderTranscriber"),
+        // On-device transcription and summaries (Apple's models, or open models from Hugging Face)
+        // and share copies; spawned by the daemon at background priority.
+        .executableTarget(name: "MeetingRecorderTranscriber",
+                          dependencies: ["AgentCore", .product(name: "WhisperKit", package: "WhisperKit")],
+                          path: "Sources/MeetingRecorderTranscriber"),
         .executableTarget(name: "AgentCoreChecks", dependencies: ["AgentCore"], path: "Sources/AgentCoreChecks"),
     ],
     swiftLanguageModes: [.v5]

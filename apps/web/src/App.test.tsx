@@ -100,11 +100,11 @@ describe("App", () => {
       "GET /api/status": () => json(status()),
       "GET /api/meetings": () => json({ items: [], nextCursor: null }),
       "GET /api/settings": () => json(DEFAULT_SETTINGS),
-      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [] }),
+      "GET /api/jobs": () => json({ transcriptUnavailable: null, summaryUnavailable: null, languages: [], whisperLanguages: ["hi", "en"], engines: { whisper: null, qwen: null } }),
     });
     render(<App />);
     await screen.findByText("No recordings yet");
-    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
     await waitFor(() => expect(screen.getByLabelText("Record meetings automatically")).toBeChecked());
   });
 });

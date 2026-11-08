@@ -43,7 +43,7 @@ async function setup(opts: { transcriber?: string | null } = {}) {
 describe("TranscriptionService", () => {
   it("waits for AC power, then transcribes newest first and marks done", async () => {
     const { tx, children, add, container: c, settle } = await setup();
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto" } }); // transcripts only
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto", engine: "apple", summaryEngine: "apple" } }); // transcripts only
     const older = await add(1);
     const newer = await add(2);
     tx.pump();
@@ -63,11 +63,11 @@ describe("TranscriptionService", () => {
     await add(1);
     tx.setPower("battery");
     expect(children).toHaveLength(0);
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: false, summarize: true, language: "auto" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: false, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" } });
     tx.setPower("ac");
     expect(children).toHaveLength(0);
     await c.recording.toggle(); // recording starts
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: true, language: "auto" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" } });
     expect(children).toHaveLength(0);
   });
 
@@ -187,9 +187,9 @@ describe("TranscriptionService", () => {
     const id = await add(1);
     tx.setPower("ac");
     await vi.waitFor(() => expect(children).toHaveLength(1));
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: false, summarize: true, language: "auto" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: false, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" } });
     expect(children[0]!.killed).toBe("SIGTERM");
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: true, language: "auto" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" } });
     await vi.waitFor(() => expect(children).toHaveLength(2));
     c.bus.publish({ type: "meetingDeleted", id });
     expect(children[1]!.killed).toBe("SIGTERM");
@@ -241,7 +241,7 @@ describe("summaries (after transcripts)", () => {
 
   it("summaries switched off: transcripts still run, summaries don't", async () => {
     const { tx, children, add, container: c } = await setup();
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto", engine: "apple", summaryEngine: "apple" } });
     const id = await add(1);
     tx.setPower("ac");
     await vi.waitFor(() => expect(children).toHaveLength(1));
@@ -297,7 +297,7 @@ describe("review fixes: manual jobs, retry semantics, stale summaries, language"
 
   it("'Summarize now' runs even when automatic summaries are off", async () => {
     const { tx, children, id, container: c } = await transcribed();
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "auto", engine: "apple", summaryEngine: "apple" } });
     tx.setPower("ac");
     await new Promise((r) => setTimeout(r, 20));
     expect(children).toHaveLength(0);
@@ -397,7 +397,7 @@ describe("review fixes: manual jobs, retry semantics, stale summaries, language"
 
   it("passes the chosen language to the transcriber", async () => {
     const { tx, children, add, container: c } = await setup();
-    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "hi_IN" } });
+    await c.settings.update({ ...c.settings.get(), transcription: { enabled: true, summarize: false, language: "hi_IN", engine: "apple", summaryEngine: "apple" } });
     await add(1);
     tx.setPower("ac");
     await vi.waitFor(() => expect(children).toHaveLength(1));

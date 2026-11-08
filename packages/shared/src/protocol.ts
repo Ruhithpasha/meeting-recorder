@@ -9,14 +9,14 @@ import { Ajv, type ValidateFunction } from "ajv";
 import schema from "../protocol.schema.json" with { type: "json" };
 import type {
   HelloEvent, MicEvent, RecordingEvent, TrayEvent, PowerEvent, PermissionEvent,
-  StartCommand, StopCommand, StateCommand, OpenUrlCommand,
+  StartCommand, StopCommand, StateCommand, OpenUrlCommand, ShareCommand,
 } from "./protocol.gen.ts";
 
 export type * from "./protocol.gen.ts";
 export { PROTOCOL_VERSION } from "./protocol.gen.ts";
 
 export type AgentEvent = HelloEvent | MicEvent | RecordingEvent | TrayEvent | PowerEvent | PermissionEvent;
-export type DaemonCommand = StartCommand | StopCommand | StateCommand | OpenUrlCommand;
+export type DaemonCommand = StartCommand | StopCommand | StateCommand | OpenUrlCommand | ShareCommand;
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
 

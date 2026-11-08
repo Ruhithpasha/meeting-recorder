@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { ShareWhat } from "@meeting-recorder/shared";
 import type { Container } from "../container.ts";
 import { conflict, notFound } from "../lib/errors.ts";
 
@@ -27,6 +28,9 @@ export function meetingsController(c: Container) {
       await c.recording.dispatch({ type: "start", trigger: { app: "Manual", title: "Manual recording", source: "manual" } });
       return reply.code(202).send(c.status.get());
     },
+
+    share: async (request: FastifyRequest<{ Params: { id: string }; Body: { what: ShareWhat } }>, reply: FastifyReply) =>
+      reply.code(202).send(await c.share.share(request.params.id, request.body.what)),
 
     reveal: async (request: IdRequest, reply: FastifyReply) => {
       const { dir, file } = await c.meetings.media(request.params.id);

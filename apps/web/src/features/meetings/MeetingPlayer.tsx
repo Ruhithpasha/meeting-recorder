@@ -1,21 +1,28 @@
 import { useRef, useState } from "react";
-import type { Meeting } from "@meeting-recorder/shared";
-import { FolderOpen, Trash2 } from "lucide-react";
+import type { Meeting, ServerEvent, ShareWhat } from "@meeting-recorder/shared";
+import { ChevronDown, FileText, Film, FolderOpen, Share, Trash2, Video } from "lucide-react";
 import { cn } from "cn";
 import { api } from "@/api/client.ts";
 import { formatBytes, formatDateTime, formatDuration } from "@/components/format.ts";
 import { EmptyState } from "@/components/ui.tsx";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SummaryPanel } from "./SummaryPanel.tsx";
 import { TranscriptPanel } from "./TranscriptPanel.tsx";
 
-/** Plays a meeting (streamed with Range requests, so seeking works) and deletes it to the Trash. */
-export function MeetingPlayer({ meeting, onDeleted }: { meeting: Meeting | null; onDeleted: (id: string) => void }) {
+export type ShareProgress = Extract<ServerEvent, { type: "share" }>;
+
+/** Plays a meeting (streamed with Range requests, so seeking works), shares it, deletes it to the Trash. */
+export function MeetingPlayer({ meeting, share, onDeleted }: { meeting: Meeting | null; share?: ShareProgress; onDeleted: (id: string) => void }) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [videoError, setVideoError] = useState(false);
+  const [dismissed, setDismissed] = useState<ShareProgress | undefined>();
   const video = useRef<HTMLVideoElement>(null);
 
   if (!meeting) return <EmptyState title="Select a meeting">Pick a recording on the left to play it.</EmptyState>;
@@ -34,7 +41,14 @@ export function MeetingPlayer({ meeting, onDeleted }: { meeting: Meeting | null;
     }
   };
 
+  const shareAs = (what: ShareWhat) => {
+    setError(null);
+    setDismissed(share); // a new attempt hides the last copy's failure
+    api.share(meeting.id, what).catch((e: Error) => setError(e.message));
+  };
+
   const recording = meeting.status === "recording";
+  const copying = share?.state === "exporting";
   const facts: [string, string][] = [
     ["App", meeting.app],
     ["Started", formatDateTime(meeting.startedAt)],
@@ -70,6 +84,28 @@ export function MeetingPlayer({ meeting, onDeleted }: { meeting: Meeting | null;
       )}
       <div className="mb-1 mt-3 flex flex-wrap items-center gap-2">
         {!recording && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button disabled={copying}><Share />{copying ? `Making a smaller copy… ${share?.percent ?? 0}%` : "Share"}<ChevronDown /></Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-72">
+              <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Opens the Mac's share menu: AirDrop, Mail, Messages…</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => shareAs("video")}>
+                <Video /><div className="grid"><span>Video</span><span className="text-xs text-muted-foreground">Smaller 720p copy, everyone in one audio track</span></div>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => shareAs("original")}>
+                <Film /><div className="grid"><span>Original recording</span><span className="text-xs text-muted-foreground">Full quality, {formatBytes(meeting.sizeBytes)}</span></div>
+              </DropdownMenuItem>
+              {meeting.summary === "done" && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onSelect={() => shareAs("summary")}><FileText />Summary</DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        {!recording && (
           <Button variant="outline" onClick={() => { api.reveal(meeting.id).catch((e: Error) => setError(e.message)); }}>
             <FolderOpen />Show in Finder
           </Button>
@@ -90,7 +126,12 @@ export function MeetingPlayer({ meeting, onDeleted }: { meeting: Meeting | null;
           )}
         </div>
       </div>
-      {error && <p className="mt-2 text-sm text-destructive" role="alert">{error}</p>}
+      {copying && (
+        <Progress className="mt-2 h-1" value={share?.percent ?? 0} aria-label="Making a smaller copy" />
+      )}
+      {(error ?? (share?.state === "failed" && share !== dismissed ? share.error : null)) && (
+        <p className="mt-2 text-sm text-destructive" role="alert">{error ?? share?.error}</p>
+      )}
       <SummaryPanel meeting={meeting} />
       <TranscriptPanel meeting={meeting} onSeek={(s) => {
         if (!video.current) return;

@@ -40,8 +40,9 @@ export interface Settings {
   autoRecord: boolean;
   quality: "720p30" | "1080p30" | "720p15" | "1080p15" | "720p10";
   /** On-device transcription and, after it, an on-device summary. `language` is "auto" (this
-   *  Mac's language) or a language id such as "en_IN" or "hi_IN". */
-  transcription: { enabled: boolean; summarize: boolean; language: string };
+   *  Mac's language, or detected by Whisper) or a language id such as "en_IN" or "hi_IN".
+   *  Engines: Apple's built-in models, or open models downloaded once from Hugging Face. */
+  transcription: { enabled: boolean; summarize: boolean; language: string; engine: TranscriptEngine; summaryEngine: SummaryEngine };
   /** Extra bundle IDs that should trigger auto-recording when they use the mic. */
   extraApps: string[];
 }
@@ -49,7 +50,7 @@ export interface Settings {
 export const DEFAULT_SETTINGS: Settings = {
   autoRecord: true,
   quality: "720p30",
-  transcription: { enabled: true, summarize: true, language: "auto" },
+  transcription: { enabled: true, summarize: true, language: "auto", engine: "apple", summaryEngine: "apple" },
   extraApps: [],
 };
 
@@ -61,13 +62,23 @@ export interface Transcript {
   segments: { start: number; end: number; speaker: string; text: string }[];
 }
 
+export type TranscriptEngine = "apple" | "whisper";
+export type SummaryEngine = "apple" | "qwen";
+
 /** What the transcription features can do on this Mac (GET /api/jobs). */
 export interface JobsInfo {
   transcriptUnavailable: string | null;
   summaryUnavailable: string | null;
   /** Languages the on-device transcriber supports, e.g. ["en_IN", "hi_IN", …]. */
   languages: string[];
+  /** Languages the Whisper engine supports, as codes ("hi", "en", …); works on any macOS. */
+  whisperLanguages: string[];
+  /** Why an open-model engine can't run on this Mac (null when it can). */
+  engines: { whisper: string | null; qwen: string | null };
 }
+
+/** Share a meeting through the macOS share sheet (POST /api/meetings/:id/share). */
+export type ShareWhat = "video" | "original" | "summary";
 
 /** summary.json written by the on-device summarizer. */
 export interface MeetingSummary {
@@ -82,4 +93,6 @@ export interface MeetingSummary {
 export type ServerEvent =
   | { type: "status"; status: Status }
   | { type: "meeting"; meeting: Meeting }
-  | { type: "meetingDeleted"; id: string };
+  | { type: "meetingDeleted"; id: string }
+  /** Progress of a share copy (POST /api/meetings/:id/share with what "video"). */
+  | { type: "share"; id: string; state: "exporting" | "ready" | "failed"; percent?: number; error?: string };

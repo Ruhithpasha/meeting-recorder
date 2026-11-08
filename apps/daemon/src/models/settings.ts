@@ -12,11 +12,13 @@ export const SETTINGS_SCHEMA = {
     transcription: {
       type: "object",
       additionalProperties: false,
-      required: ["enabled", "summarize", "language"],
+      required: ["enabled", "summarize", "language", "engine", "summaryEngine"],
       properties: {
         enabled: { type: "boolean" },
         summarize: { type: "boolean" },
         language: { type: "string", pattern: "^(auto|[a-z]{2,3}(_[A-Z]{2})?)$" },
+        engine: { enum: ["apple", "whisper"] },
+        summaryEngine: { enum: ["apple", "qwen"] },
       },
     },
     extraApps: {
