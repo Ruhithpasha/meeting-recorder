@@ -14,6 +14,13 @@ public enum CaptureMath {
 
     /// Fragment length, and the keyframe interval (time-based, so static screens still get keyframes).
     public static let fragmentSeconds = 5.0
+
+    /// H.264 average bitrate. Screen content compresses well; these keep text sharp.
+    ///   720p15 1.5 Mbps (~0.7 GB/h) · 720p30 2.5 Mbps (~1.1 GB/h) · 1080p15 3 Mbps · 1080p30 5 Mbps (~2.2 GB/h)
+    public static func videoBitrate(height: Int, fps: Int) -> Int {
+        let base = height >= 1080 ? 3_000_000 : 1_500_000
+        return fps >= 30 ? base * 5 / 3 : fps <= 10 ? base * 2 / 3 : base
+    }
 }
 
 /// Drops frames that arrive closer together than 90% of the target frame period.

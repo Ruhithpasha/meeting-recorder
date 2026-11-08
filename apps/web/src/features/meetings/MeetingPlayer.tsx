@@ -48,6 +48,9 @@ export function MeetingPlayer({ meeting, onDeleted }: { meeting: Meeting | null;
         <video ref={video} key={meeting.id} className="video" src={api.mediaUrl(meeting.id)} controls preload="metadata" onError={() => setVideoError(true)} />
       )}
       <div className="player-actions">
+        {!recording && (
+          <Button onClick={() => { api.reveal(meeting.id).catch((e: Error) => setError(e.message)); }}>Show in Finder</Button>
+        )}
         {!confirming ? (
           <Button variant="danger" disabled={recording} onClick={() => setConfirming(true)}>Delete…</Button>
         ) : (

@@ -12,9 +12,16 @@ final class AppController: NSObject, NSApplicationDelegate {
     private let mic = MicMonitor()
     private let permissions = Permissions()
     private let power = PowerMonitor()
+    private let dashboard = DashboardWindow()
+    /// launchd starts us with --background at login: stay in the menu bar. Opened by the user
+    /// (Finder, Spotlight, Launchpad, `meeting-recorder open`): show the dashboard window.
+    private let launchedInBackground = CommandLine.arguments.contains("--background")
     private var daemon: DaemonHost?
     private var lastPermission: PermissionState = .granted
     private var quitting = false
+    /// Set by deliberate quits only (Quit menu item, logout/shutdown, SIGTERM). Dock → Quit just
+    /// closes the dashboard: the recorder is meant to run all the time.
+    private var allowTermination = false
     private var sigterm: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -23,7 +30,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         // finalized (applicationWillTerminate) instead of the process just dying.
         signal(SIGTERM, SIG_IGN)
         let term = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        term.setEventHandler { NSApp.terminate(nil) }
+        term.setEventHandler { [weak self] in self?.allowTermination = true; NSApp.terminate(nil) }
         term.resume()
         sigterm = term
         guard isOnlyInstance() else { return NSApp.terminate(nil) }
@@ -35,6 +42,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         menu.onOpenFolder = { [weak self] in self?.send(EventEncoder.tray(.openFolder)) }
         menu.onOpenPermissions = { Permissions.openScreenRecordingSettings() }
         menu.onQuit = { [weak self] in self?.quit() }
+        MainMenu.install(target: self, quit: #selector(quitFromMenu), closeWindow: #selector(closeDashboard))
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.allowTermination = true // logout, restart, shutdown
+        }
 
         switch AgentConfig.load() {
         case .failure(let error):
@@ -92,7 +103,25 @@ final class AppController: NSObject, NSApplicationDelegate {
         permissions.start()
         power.start()
         mic.start()
+        if !launchedInBackground { send(EventEncoder.tray(.openDashboard)) } // the daemon replies with openUrl
     }
+
+    /// Double-clicking the app (or `open -a`) while it's already running: show the dashboard.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        send(EventEncoder.tray(.openDashboard))
+        return false
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if allowTermination { return .terminateNow }
+        dashboard.close() // e.g. Dock → Quit: close the window, keep recording meetings
+        return .terminateCancel
+    }
+
+    @objc private func quitFromMenu() { quit() }
+    @objc private func closeDashboard() { dashboard.close() }
 
     /// First line to every (re)started daemon, followed by the current facts it needs.
     private func sendHello() {
@@ -110,7 +139,7 @@ final class AppController: NSObject, NSApplicationDelegate {
             menu.render(status: c.status, label: c.label)
             if quitting, c.status == .idle { NSApp.terminate(nil) }
         case .openUrl(let c):
-            if let url = URL(string: c.url) { NSWorkspace.shared.open(url) }
+            if let url = URL(string: c.url) { dashboard.show(url: url) } // in-app window, not a browser
         }
     }
 
@@ -120,6 +149,7 @@ final class AppController: NSObject, NSApplicationDelegate {
 
     /// Quit finishes an active recording first: the daemon stops it and we exit on its idle state.
     private func quit() {
+        allowTermination = true
         guard recorder.isBusy else { return NSApp.terminate(nil) }
         quitting = true
         send(EventEncoder.tray(.quit))

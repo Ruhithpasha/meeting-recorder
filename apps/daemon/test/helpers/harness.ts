@@ -41,6 +41,7 @@ export async function makeContainer(opts: { freeBytes?: number; transcriberPath?
   const dirs = tempDirs();
   const agent = new FakeAgent();
   const opened: string[] = [];
+  const revealed: string[] = [];
   const container = await createContainer({
     meetingsDir: dirs.meetingsDir,
     stateDir: dirs.stateDir,
@@ -52,8 +53,9 @@ export async function makeContainer(opts: { freeBytes?: number; transcriberPath?
     freeBytes: async () => opts.freeBytes ?? 100 * 1024 ** 3,
     transcriberPath: opts.transcriberPath ?? null,
     spawner: opts.spawner,
+    reveal: (path) => revealed.push(path),
   });
-  return { container, agent, dirs, opened };
+  return { container, agent, dirs, opened, revealed };
 }
 
 export const TEST_PORT = 47321;

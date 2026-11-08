@@ -104,7 +104,7 @@ write_launch_agent() {
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$APP_BUNDLE/Contents/MacOS/MeetingRecorderAgent</string></array>
+  <key>ProgramArguments</key><array><string>$APP_BUNDLE/Contents/MacOS/MeetingRecorderAgent</string><string>--background</string></array>
   <key>AssociatedBundleIdentifiers</key><array><string>$LABEL</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
@@ -264,12 +264,10 @@ cmd_status() {
   if status="$(daemon_status 2>/dev/null)"; then echo "$status"; else echo "Meeting Recorder isn't running."; exit 1; fi
 }
 
+# Opens the dashboard window in the app (starting the app if needed).
 cmd_open() {
-  local runtime="$HOME_DIR/runtime.json" port token
-  [ -f "$runtime" ] || die "Meeting Recorder isn't running."
-  port="$(/usr/bin/plutil -extract port raw -o - "$runtime")"
-  token="$(/usr/bin/plutil -extract token raw -o - "$runtime")"
-  open "http://127.0.0.1:$port/#t=$token"
+  [ -d "$APP_BUNDLE" ] || die "Meeting Recorder isn't installed."
+  open -a "$APP_BUNDLE"
 }
 
 cmd_logs() { tail -n 100 -F "$HOME_DIR/logs/agent.log" "$HOME_DIR/logs/daemon.log"; }

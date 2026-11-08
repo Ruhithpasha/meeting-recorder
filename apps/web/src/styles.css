@@ -56,8 +56,13 @@ h2 { font-size: 1.1rem; margin: 0 0 4px; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .columns { grid-template-columns: 1fr; } }
 
 .meeting-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.meeting-row { width: 100%; text-align: left; display: grid; gap: 2px; padding: 10px 12px; font: inherit; color: inherit;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; }
+.meeting-row { width: 100%; text-align: left; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px;
+  padding: 10px 12px; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); cursor: pointer; transition: border-color 120ms, background 120ms; }
+.meeting-main { display: grid; gap: 2px; min-width: 0; }
+.meeting-badges { display: grid; gap: 4px; justify-items: end; }
+.app-dot { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-weight: 700; font-size: 0.85rem;
+  background: var(--selected); color: var(--accent); }
 .meeting-row:hover { border-color: var(--muted); }
 .meeting-row.selected { background: var(--selected); border-color: var(--accent); }
 .meeting-title { font-weight: 600; overflow-wrap: anywhere; }
@@ -104,3 +109,13 @@ select, textarea { font: inherit; color: inherit; background: var(--bg); border:
 .speaker-you { color: var(--accent); }
 .segment-text { overflow-wrap: anywhere; }
 @media (max-width: 520px) { .segment { grid-template-columns: 1fr; gap: 0; } }
+
+.logo { display: inline-block; width: 14px; height: 14px; border-radius: 50%; background: var(--live); margin-right: 8px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--live) 25%, transparent); vertical-align: -1px; }
+.topbar { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 4px 0 8px; }
+.search { width: 100%; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 8px 10px; margin-bottom: 8px; }
+.day-label { font-size: 0.78rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 14px 2px 6px; }
+.banner-timer { font-variant-numeric: tabular-nums; font-weight: 600; margin-left: 4px; }
+.state-inline { padding: 8px 2px; }
+.meeting-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

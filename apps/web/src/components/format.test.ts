@@ -11,3 +11,18 @@ describe("format", () => {
     expect(formatDateTime("not a date")).toBe("not a date");
   });
 });
+
+describe("dayLabel / formatTime", () => {
+  const now = new Date(2026, 10, 8, 15, 0);
+  it("labels today, yesterday and older days", async () => {
+    const { dayLabel } = await import("./format.ts");
+    expect(dayLabel(new Date(2026, 10, 8, 9, 0).toISOString(), now)).toBe("Today");
+    expect(dayLabel(new Date(2026, 10, 7, 23, 0).toISOString(), now)).toBe("Yesterday");
+    expect(dayLabel(new Date(2026, 10, 2, 9, 0).toISOString(), now, "en-GB")).toMatch(/2 November 2026/);
+    expect(dayLabel("garbage", now)).toBe("Unknown date");
+  });
+  it("formats a time of day", async () => {
+    const { formatTime } = await import("./format.ts");
+    expect(formatTime(new Date(2026, 10, 8, 14, 30).toISOString(), "en-GB")).toBe("14:30");
+  });
+});

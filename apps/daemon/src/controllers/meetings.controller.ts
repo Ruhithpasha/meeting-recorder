@@ -28,6 +28,12 @@ export function meetingsController(c: Container) {
       return reply.code(202).send(c.status.get());
     },
 
+    reveal: async (request: IdRequest, reply: FastifyReply) => {
+      const { dir, file } = await c.meetings.media(request.params.id);
+      c.reveal(`${dir}/${file}`);
+      return reply.code(204).send();
+    },
+
     transcript: async (request: IdRequest, reply: FastifyReply) => {
       const meeting = c.meetings.get(request.params.id);
       if (meeting.transcript !== "done") throw notFound("Transcript");

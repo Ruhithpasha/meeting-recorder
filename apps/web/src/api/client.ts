@@ -38,5 +38,6 @@ export const api = {
   putSettings: (settings: Settings) => request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   mediaUrl: (id: string) => `/api/meetings/${encodeURIComponent(id)}/media`,
   getTranscript: (id: string) => request<Transcript>(`/api/meetings/${encodeURIComponent(id)}/transcript`),
+  reveal: (id: string) => request<void>(`/api/meetings/${encodeURIComponent(id)}/reveal`, { method: "POST" }),
   transcribe: (id: string) => request<Meeting>(`/api/meetings/${encodeURIComponent(id)}/transcribe`, { method: "POST" }),
 };

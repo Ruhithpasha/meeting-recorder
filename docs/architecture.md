@@ -77,6 +77,7 @@ AVAssetWriter writes each fragment's data first, then the `moof` describing it, 
 | `MicMonitor` | CoreAudio process objects (macOS 14+): which other apps are using a mic, event-driven through property listeners, which are removed when a process goes away. Window titles are re-read every 2 s only while some app uses a mic. A generation counter stops a slow title lookup from publishing a stale snapshot. |
 | `DaemonHost` | Spawns the pinned Node daemon, validates every command (`CommandValidator`: schema rules Codable can't express, e.g. start paths must be `<Meetings>/<id>/recording.mp4`), and restarts it with backoff (1 to 30 s). |
 | `Permissions`, `PowerMonitor` | Screen Recording preflight at launch, hourly and on wake. Sleep, wake, AC and battery. |
+| `DashboardWindow` | The dashboard in a native `WKWebView` window.<br>• Only the local 127.0.0.1 dashboard loads inside it; other links open in the browser.<br>• Uses non-persistent web storage.<br>• Releases WebKit on close.<br>• Opens when the user opens the app; the login item passes `--background` so login stays quiet.<br>• No ⌘Q, so closing the window never stops the recorder. |
 | `MeetingRecorderTranscriber` | Separate executable; see below. |
 | `AgentCore` | Pure logic (wire format, validator, capture math, transcript format), checked by `swift run AgentCoreChecks`. The Command Line Tools ship without XCTest. |
 

@@ -53,6 +53,14 @@ function Dashboard() {
     everOpen.current = true;
   }, [connection, reload]);
 
+  // Nothing chosen yet: open the newest meeting once, so the player isn't empty. It's a real
+  // selection, so a new recording arriving later doesn't yank the player away mid-playback.
+  const newestId = meetings.items[0]?.id;
+  useEffect(() => {
+    if (selectedId === null && newestId) setSelectedId(newestId);
+  }, [selectedId, newestId]);
+
+  // (All hooks above this line: the early return below must not change the hook order.)
   if (connection === "closed") {
     return (
       <main className="shell">
@@ -64,18 +72,19 @@ function Dashboard() {
   }
 
   const selected = meetings.items.find((m) => m.id === selectedId) ?? null;
+  const liveMeeting = status?.meetingId ? meetings.items.find((m) => m.id === status.meetingId) ?? null : null;
 
   return (
     <div className="shell">
       <header className="topbar">
-        <h1>Meeting Recorder</h1>
+        <h1><span className="logo" aria-hidden="true" />Meeting Recorder</h1>
         <nav aria-label="Sections">
           <button type="button" className={view === "meetings" ? "tab active" : "tab"} aria-current={view === "meetings" ? "page" : undefined} onClick={() => setView("meetings")}>Meetings</button>
           <button type="button" className={view === "settings" ? "tab active" : "tab"} aria-current={view === "settings" ? "page" : undefined} onClick={() => setView("settings")}>Settings</button>
         </nav>
       </header>
       {connection === "reconnecting" && <p className="note" role="status">Lost connection to the recorder. Reconnecting…</p>}
-      <RecordingBanner status={status} />
+      <RecordingBanner status={status} meeting={liveMeeting} />
       <main>
         {view === "meetings" ? (
           <div className="columns">

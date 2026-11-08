@@ -8,7 +8,7 @@ export const SETTINGS_SCHEMA = {
   required: ["autoRecord", "quality", "transcription", "extraApps"],
   properties: {
     autoRecord: { type: "boolean" },
-    quality: { enum: ["720p15", "1080p15", "720p10"] },
+    quality: { enum: ["720p30", "1080p30", "720p15", "1080p15", "720p10"] },
     transcription: {
       type: "object",
       additionalProperties: false,

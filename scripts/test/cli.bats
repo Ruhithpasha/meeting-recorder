@@ -155,8 +155,24 @@ make_remote() {
   run "$CLI" status
   [ "$status" -ne 0 ]
   [[ "$output" == *"isn't running"* ]]
+  rm -rf "$MR_APPS_DIR/Meeting Recorder.app"
   run "$CLI" open
   [ "$status" -ne 0 ]
+  [[ "$output" == *"isn't installed"* ]]
+}
+
+@test "open shows the dashboard in the app, not a browser URL with the token" {
+  fake_install
+  run "$CLI" open
+  [ "$status" -eq 0 ]
+  grep -q "open -a $MR_APPS_DIR/Meeting Recorder.app" "$CALLS"
+  ! grep -q "#t=" "$CALLS"
+}
+
+@test "the login item starts the agent in the background (no window at login)" {
+  fake_install
+  run "$CLI" repair
+  grep -q "<string>--background</string>" "$MR_LAUNCH_AGENTS_DIR/com.meetingrecorder.agent.plist"
 }
 
 @test "unknown commands print usage and exit 64" {

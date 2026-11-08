@@ -61,8 +61,10 @@ export default function SettingsView() {
       <label className="field">
         Video quality
         <select value={settings.quality} onChange={(e) => update({ quality: e.target.value as Settings["quality"] })}>
-          <option value="720p15">720p, 15 fps (recommended, ~700 MB/hour)</option>
-          <option value="1080p15">1080p, 15 fps (sharper text, larger files)</option>
+          <option value="720p30">720p, 30 fps (recommended, ~1.1 GB/hour)</option>
+          <option value="1080p30">1080p, 30 fps (sharpest, ~2.2 GB/hour)</option>
+          <option value="720p15">720p, 15 fps (lighter, ~0.7 GB/hour)</option>
+          <option value="1080p15">1080p, 15 fps (sharp text, ~1.4 GB/hour)</option>
           <option value="720p10">720p, 10 fps (lowest CPU and disk)</option>
         </select>
       </label>

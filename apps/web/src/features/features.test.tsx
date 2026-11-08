@@ -68,6 +68,7 @@ describe("MeetingPlayer", () => {
     const { container } = render(<MeetingPlayer meeting={meeting(1)} onDeleted={vi.fn()} />);
     expect(container.querySelector("video")).toHaveAttribute("src", `/api/meetings/${meeting(1).id}/media`);
     expect(screen.getByText(/30:00 · 300 MB/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show in Finder" })).toBeInTheDocument();
   });
 
   it("no player and no delete while recording", () => {
@@ -230,5 +231,48 @@ describe("TranscriptPanel (via MeetingPlayer)", () => {
     expect(screen.queryByText("Transcript")).toBeNull();
     rerender(<MeetingPlayer meeting={meeting(1, { transcript: "done" })} onDeleted={vi.fn()} />);
     expect(await screen.findByText(/No speech was found/)).toBeInTheDocument();
+  });
+});
+
+describe("dashboard improvements", () => {
+  it("groups meetings by day and filters with search", async () => {
+    const today = new Date(); today.setHours(9, 0, 0, 0);
+    const props = listProps({
+      phase: "ready",
+      items: [
+        meeting(9, { title: "Design review", startedAt: today.toISOString() }),
+        meeting(1, { title: "Budget sync", app: "Microsoft Teams" }),
+      ],
+    });
+    render(<MeetingList {...props} />);
+    expect(screen.getByRole("heading", { name: "Today" })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Search meetings"), "teams");
+    expect(screen.queryByText("Design review")).toBeNull();
+    expect(screen.getByText("Budget sync")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Search meetings"));
+    await userEvent.type(screen.getByLabelText("Search meetings"), "zzz");
+    expect(screen.getByText(/No meetings match/)).toBeInTheDocument();
+  });
+
+  it("the banner shows the live meeting's app and a running timer", () => {
+    const started = new Date(Date.now() - 125_000).toISOString();
+    render(<RecordingBanner status={status({ state: "recording", meetingId: meeting(1).id })} meeting={meeting(1, { app: "Google Meet", startedAt: started, status: "recording" })} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/Google Meet/);
+    expect(screen.getByRole("status")).toHaveTextContent(/2:0\d/);
+  });
+
+  it("Show in Finder asks the daemon to reveal the file", async () => {
+    const calls = mockFetch({ [`POST /api/meetings/${meeting(1).id}/reveal`]: () => new Response(null, { status: 204 }) });
+    render(<MeetingPlayer meeting={meeting(1)} onDeleted={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Show in Finder" }));
+    expect(calls.at(-1)).toMatchObject({ method: "POST", path: `/api/meetings/${meeting(1).id}/reveal` });
+  });
+});
+
+describe("review fixes", () => {
+  it("search explains it only covers loaded meetings when there are more pages", async () => {
+    render(<MeetingList {...listProps({ phase: "ready", items: [meeting(1)], nextCursor: "x" })} />);
+    await userEvent.type(screen.getByLabelText("Search meetings"), "budget");
+    expect(screen.getByText(/load older meetings to search further/)).toBeInTheDocument();
   });
 });

@@ -37,7 +37,12 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 - **Manual:** menu bar → Start/Stop Recording, or the dashboard's button.
 - **Stopping early:** if you stop an automatic recording during a call, it won't restart until that call ends.
 - **Browser calls (Meet, Teams web):** these need the meeting tab to be the visible tab, because the app checks the window title. Joining with your mic muted at the OS level isn't detected; start those manually.
-- **Dashboard:** menu bar → Open Dashboard. It lists your meetings, plays them (with seeking), shows transcripts you can click to jump to a moment, deletes meetings to the Trash, and has settings for quality, auto-record, transcription and extra apps.
+- **Dashboard:** opens in the app's own window (no browser, nothing hosted). Get there by opening Meeting Recorder from Finder, Spotlight or Launchpad, choosing menu bar → Open Dashboard, or running `meeting-recorder open`.
+  - Meetings are grouped by day and searchable.
+  - Plays recordings with seeking; transcripts are clickable to jump to a moment.
+  - Show in Finder, and delete to the Trash.
+  - Settings: quality (720p or 1080p, at 30 or 15 fps), auto-record, transcription, extra apps.
+  - Closing the window doesn't stop recording. To stop Meeting Recorder completely, use "Quit Meeting Recorder" in the menu bar or the app menu.
 - **Files:** one folder per meeting, for example `~/Meetings/2026-11-08_14-30-05_zoom/`:
   - `recording.mp4`: H.264 video plus two AAC tracks (others, you). It plays in QuickTime.
   - `meta.json`: the meeting's details.
@@ -60,7 +65,7 @@ Laws in many places require **everyone on a call to agree** before it is recorde
   - There's no telemetry or auto-updater: updates happen only when you run `meeting-recorder update`.
 - **Lightweight:**
   - The menu-bar app plus the background service use roughly 15–60 MB while recording.
-  - Recordings are 720p at 15 fps with hardware encoding, about 700 MB per hour.
+  - Recordings default to 720p at 30 fps with hardware encoding, about 1.1 GB per hour. 1080p 30 fps is about 2.2 GB per hour. The 15 fps options use about 40% less (720p 15 fps: about 0.7 GB per hour; 1080p 15 fps: about 1.4 GB per hour).
   - If the app crashes or the Mac loses power, the recording is kept up to the last 5 seconds.
 
 ## Troubleshooting

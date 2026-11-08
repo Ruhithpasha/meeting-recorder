@@ -77,6 +77,13 @@ check(buffer.append(Data("ok\n".utf8)) == ["ok"], "buffer recovers after runaway
 check(CaptureMath.evenWidth(displayWidth: 1920, displayHeight: 1080, height: 720) == 1280, "16:9 width")
 check(CaptureMath.evenWidth(displayWidth: 1512, displayHeight: 982, height: 720) == 1108, "MacBook 14 width (spike)")
 check(CaptureMath.evenWidth(displayWidth: 1, displayHeight: 1000, height: 720) == 2, "tiny width clamps")
+check(CaptureMath.videoBitrate(height: 720, fps: 15) == 1_500_000, "720p15 bitrate")
+check(CaptureMath.videoBitrate(height: 720, fps: 30) == 2_500_000, "720p30 bitrate")
+check(CaptureMath.videoBitrate(height: 1080, fps: 30) == 5_000_000, "1080p30 bitrate")
+check(CaptureMath.videoBitrate(height: 720, fps: 10) == 1_000_000, "720p10 bitrate")
+var pacer30 = FramePacer(fps: 30)
+check(pacer30.accept(CMTime(value: 0, timescale: 30_000)) && pacer30.accept(CMTime(value: 1_001, timescale: 30_000)), "30 fps frames (1/30 s apart) pass the pacer")
+check(!pacer30.accept(CMTime(value: 1_400, timescale: 30_000)), "a 75 fps duplicate is still dropped at 30 fps")
 var pacer = FramePacer(fps: 15)
 let t = { (s: Double) in CMTime(seconds: s, preferredTimescale: 600) }
 check(pacer.accept(t(0)), "first frame accepted")

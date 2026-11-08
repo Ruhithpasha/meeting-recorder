@@ -23,6 +23,8 @@ export interface ContainerOptions {
   log: Logger;
   dashboardUrl: () => string;
   openFolder: () => void;
+  /** Selects a file in Finder (open -R). */
+  reveal?: (path: string) => void;
   trashItem?: (path: string) => Promise<void>;
   freeBytes?: (path: string) => Promise<number>;
   /** MeetingRecorderTranscriber inside the app bundle (MR_TRANSCRIBER); null disables transcription. */
@@ -67,6 +69,7 @@ export async function createContainer(o: ContainerOptions) {
 
   return {
     bus, status, repo, settings, recovery, disk, recording, detection, meetings, transcription, onAgentEvent,
+    reveal: o.reveal ?? (() => {}),
     start() {
       repo.startWatching();
       disk.start(recording, status);

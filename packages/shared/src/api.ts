@@ -32,7 +32,7 @@ export interface Status {
 
 export interface Settings {
   autoRecord: boolean;
-  quality: "720p15" | "1080p15" | "720p10";
+  quality: "720p30" | "1080p30" | "720p15" | "1080p15" | "720p10";
   transcription: { enabled: boolean; model: "tiny" | "base" | "small" };
   /** Extra bundle IDs that should trigger auto-recording when they use the mic. */
   extraApps: string[];
@@ -40,7 +40,7 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   autoRecord: true,
-  quality: "720p15",
+  quality: "720p30",
   transcription: { enabled: true, model: "base" },
   extraApps: [],
 };

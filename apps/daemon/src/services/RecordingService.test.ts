@@ -31,7 +31,7 @@ describe("idle", () => {
     const { c, agent, id, dirs } = await started();
     expect(c.recording.stateName).toBe("starting");
     expect(id).toMatch(/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_zoom$/);
-    expect(agent.starts[0]).toMatchObject({ cmd: "start", meetingId: id, height: 720, fps: 15, path: join(dirs.meetingsDir, id, "recording.mp4") });
+    expect(agent.starts[0]).toMatchObject({ cmd: "start", meetingId: id, height: 720, fps: 30, path: join(dirs.meetingsDir, id, "recording.mp4") });
     expect(existsSync(join(dirs.meetingsDir, id, "recording.state.json"))).toBe(true);
     expect(JSON.parse(readFileSync(join(dirs.meetingsDir, id, "meta.json"), "utf8"))).toMatchObject({ status: "recording", app: "Zoom" });
     expect(c.status.get()).toMatchObject({ state: "starting", meetingId: id });

@@ -150,7 +150,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             guard index == 0 else { return }
             let age = CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), pts).seconds
             guard age < CaptureMath.maxFirstFrameAgeSeconds else { return } // stale cached frame
-            guard s.writer.startWriting() else { return finish(s, error: .writer(s.writer.error?.localizedDescription ?? "Couldn't start writing.")) }
+            guard s.writer.startWriting() else { return finish(s, error: .writer(RecorderError.describe(s.writer.error))) }
             s.writer.startSession(atSourceTime: pts)
             s.startPTS = pts
             let id = s.meetingId
@@ -163,7 +163,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
         if input.isReadyForMoreMediaData, input.append(buffer) {
             if index == 0 || CMTimeCompare(pts, s.lastPTS) > 0 { s.lastPTS = pts }
         } else if s.writer.status == .failed {
-            finish(s, error: .writer(s.writer.error?.localizedDescription ?? "Writing the recording failed."))
+            finish(s, error: .writer(RecorderError.describe(s.writer.error)))
         }
     }
 
@@ -173,7 +173,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         queue.async {
             guard let s = self.session, !s.finishing else { return }
-            Log.warn("stream stopped by the system: \(error.localizedDescription)")
+            Log.warn("stream stopped by the system: \(RecorderError.describe(error))")
             if s.startPTS == nil {
                 self.finish(s, error: Self.classify(error).0 == .permission ? .permission(error.localizedDescription) : .capture(error.localizedDescription))
             } else {
@@ -205,7 +205,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             let outcome: (Double?, RecorderError?) = {
                 if let error { return (nil, error) }
                 if ok || neverStarted { return (neverStarted ? 0 : max(0, duration), nil) }
-                return (nil, .writer(s.writer.error?.localizedDescription ?? "The recording couldn't be finalized."))
+                return (nil, .writer(RecorderError.describe(s.writer.error)))
             }()
             let finished: ((String, Double?, RecorderError?) -> Void)? = self.queue.sync {
                 self.session = nil
@@ -233,7 +233,7 @@ final class Recorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sen
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: height >= 1080 ? 2_500_000 : 1_500_000,
+                AVVideoAverageBitRateKey: CaptureMath.videoBitrate(height: height, fps: fps),
                 AVVideoMaxKeyFrameIntervalDurationKey: CaptureMath.fragmentSeconds, // time-based, see spike
                 AVVideoExpectedSourceFrameRateKey: fps,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
@@ -275,6 +275,17 @@ enum RecorderError: Error {
     }
     var message: String {
         switch self { case .capture(let m), .writer(let m), .permission(let m): return m }
+    }
+
+    /// "The operation could not be completed" hides the cause: keep the domain/code (and the
+    /// underlying error) so the log says exactly what failed.
+    static func describe(_ error: Error?) -> String {
+        guard let ns = error as NSError? else { return "unknown error" }
+        var text = "\(ns.localizedDescription) [\(ns.domain) \(ns.code)]"
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError {
+            text += " caused by [\(underlying.domain) \(underlying.code)] \(underlying.localizedDescription)"
+        }
+        return text
     }
 }
 

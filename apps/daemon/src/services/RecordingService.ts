@@ -51,6 +51,8 @@ type State =
   | { name: "stopping"; meeting: Meeting; auto: boolean };
 
 const QUALITY: Record<Settings["quality"], Pick<StartCommand, "height" | "fps">> = {
+  "720p30": { height: 720, fps: 30 },
+  "1080p30": { height: 1080, fps: 30 },
   "720p15": { height: 720, fps: 15 },
   "1080p15": { height: 1080, fps: 15 },
   "720p10": { height: 720, fps: 10 },

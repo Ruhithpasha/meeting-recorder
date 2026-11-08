@@ -45,6 +45,7 @@ async function main(): Promise<void> {
     dashboardUrl: () => `http://127.0.0.1:${port}/#t=${token}`,
     openFolder: () => execFile("/usr/bin/open", [meetingsDir], (error) => error && log.warn({ error }, "open folder failed")),
     transcriberPath: process.env.MR_TRANSCRIBER ?? null,
+    reveal: (path) => execFile("/usr/bin/open", ["-R", path], (error) => error && log.warn({ error }, "reveal failed")),
   });
   const app = await buildApp({ container, token, port: () => port, webDist, loggerInstance: log });
 

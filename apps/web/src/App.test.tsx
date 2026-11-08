@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { DEFAULT_SETTINGS } from "@meeting-recorder/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,7 +28,9 @@ describe("App", () => {
       "GET /api/meetings": () => json({ items: [meeting(2), meeting(1)], nextCursor: null }),
     });
     render(<App />);
-    expect(await screen.findByText("Meeting 2")).toBeInTheDocument();
+    const list = await screen.findByRole("region", { name: "Meetings" });
+    expect(within(list).getByText("Meeting 2")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Meeting 2" })).toBeInTheDocument(); // newest opens automatically (effect)
     expect(window.location.hash).toBe("");
 
     const events = FakeEventSource.instances[0]!;
@@ -37,11 +39,11 @@ describe("App", () => {
       events.emit({ type: "status", status: status({ state: "recording", meetingId: meeting(3).id }) });
       events.emit({ type: "meeting", meeting: meeting(3, { status: "recording" }) });
     });
-    expect(screen.getByText("Meeting 3")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: "Meetings" })).getByText("Meeting 3")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
 
     act(() => events.emit({ type: "meetingDeleted", id: meeting(1).id }));
-    expect(screen.queryByText("Meeting 1")).toBeNull();
+    expect(within(screen.getByRole("region", { name: "Meetings" })).queryByText("Meeting 1")).toBeNull();
   });
 
   it("shows a reconnecting notice when the event stream drops", async () => {
@@ -56,13 +58,13 @@ describe("App", () => {
     let page = { items: [meeting(1, { status: "recording" })], nextCursor: null };
     mockFetch({ "GET /api/status": () => json(status()), "GET /api/meetings": () => json(page) });
     render(<App />);
-    expect(await screen.findByText("Recording")).toBeInTheDocument();
+    expect(await screen.findByText("Recording", { selector: ".badge" })).toBeInTheDocument();
     const events = FakeEventSource.instances[0]!;
     act(() => events.onopen?.());
     page = { items: [meeting(1, { status: "complete" })], nextCursor: null };
     act(() => events.onerror?.());
     act(() => events.onopen?.());
-    await waitFor(() => expect(screen.queryByText("Recording")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Recording", { selector: ".badge" })).toBeNull());
   });
 
   it("tells the user to reopen from the menu bar when the stream is closed for good (new token)", async () => {
@@ -77,11 +79,20 @@ describe("App", () => {
   it("a delete confirmation does not carry over to another meeting", async () => {
     mockFetch({ "GET /api/status": () => json(status()), "GET /api/meetings": () => json({ items: [meeting(2), meeting(1)], nextCursor: null }) });
     render(<App />);
-    await userEvent.click(await screen.findByText("Meeting 2"));
+    const list = await screen.findByRole("region", { name: "Meetings" });
+    await userEvent.click(within(list).getByText("Meeting 2"));
     await userEvent.click(screen.getByRole("button", { name: "Delete…" }));
     expect(screen.getByRole("button", { name: "Move to Trash" })).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Meeting 1"));
+    await userEvent.click(within(list).getByText("Meeting 1"));
     expect(screen.queryByRole("button", { name: "Move to Trash" })).toBeNull();
+  });
+
+  it("a new recording arriving doesn't switch the player away from the meeting being watched", async () => {
+    mockFetch({ "GET /api/status": () => json(status()), "GET /api/meetings": () => json({ items: [meeting(2), meeting(1)], nextCursor: null }) });
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Meeting 2" })).toBeInTheDocument(); // auto-opened
+    act(() => FakeEventSource.instances[0]!.emit({ type: "meeting", meeting: meeting(5, { status: "recording" }) }));
+    expect(screen.getByRole("heading", { name: "Meeting 2" })).toBeInTheDocument();
   });
 
   it("opens settings (lazy-loaded) from the nav", async () => {

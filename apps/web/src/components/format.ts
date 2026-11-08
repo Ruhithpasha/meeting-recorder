@@ -24,3 +24,20 @@ export function formatDateTime(iso: string, locale?: string): string {
   if (Number.isNaN(date.getTime())) return iso;
   return date.toLocaleString(locale, { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
+
+/** "Today", "Yesterday", or e.g. "Friday, 6 November 2026" (local time). */
+export function dayLabel(iso: string, now = new Date(), locale?: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "Unknown date";
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOf(now) - startOf(date)) / 86_400_000);
+  if (days === 0) return "Today";
+  if (days === 1) return "Yesterday";
+  return date.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+}
+
+/** Local time of day, e.g. "14:30". */
+export function formatTime(iso: string, locale?: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+}

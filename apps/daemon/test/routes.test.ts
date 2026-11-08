@@ -301,3 +301,13 @@ describe("transcript API", () => {
     expect((await app.inject({ method: "POST", url: "/api/meetings/nope/transcribe", headers: AUTH })).statusCode).toBe(400);
   });
 });
+
+describe("reveal in Finder", () => {
+  it("selects the recording in Finder; 404 without a file", async () => {
+    const { app, id, revealed, dirs } = await withMeeting();
+    const res = await app.inject({ method: "POST", url: `/api/meetings/${id}/reveal`, headers: AUTH });
+    expect(res.statusCode).toBe(204);
+    expect(revealed).toEqual([join(dirs.meetingsDir, id, "recording.mp4")]);
+    expect((await app.inject({ method: "POST", url: "/api/meetings/2020-01-01_00-00-00_none/reveal", headers: AUTH })).statusCode).toBe(404);
+  });
+});
