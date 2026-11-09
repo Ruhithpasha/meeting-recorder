@@ -191,7 +191,10 @@ final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked S
 /// chunking (silence is skipped, which is faster and stops Whisper inventing words in silence).
 final class WhisperTrackRecognizer {
     private let pipe: WhisperKit
-    let language: String?
+    /// Chosen in Settings, or detected on the first track (the call audio, which has the most
+    /// speech) by majority over its chunks, then used for the mic too. Detecting per chunk on a
+    /// mostly-quiet mic misdetects (it once guessed Icelandic) and costs a detection per chunk.
+    private(set) var language: String?
 
     /// preparing: loading compiles the model for this Mac's Neural Engine (minutes, once); say so.
     init(models: URL, localeId: String?, preparing: Bool = false) async throws {
@@ -209,6 +212,10 @@ final class WhisperTrackRecognizer {
             detectLanguage: language == nil, skipSpecialTokens: true, withoutTimestamps: false,
             concurrentWorkerCount: 1, chunkingStrategy: .vad)
         let results = try await pipe.transcribe(audioPath: pcm.path, decodeOptions: options)
+        if language == nil, let detected = OpenModelText.majorityLanguage(results.filter { !$0.segments.isEmpty }.map(\.language)) {
+            language = detected
+            emit(["status": "language", "language": detected])
+        }
         return results.flatMap(\.segments).compactMap { segment in
             let text = OpenModelText.cleanWhisper(segment.text)
             return text.isEmpty ? nil : .init(start: Double(segment.start), end: Double(segment.end), speaker: speaker, text: text)

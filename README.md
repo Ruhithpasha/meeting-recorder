@@ -76,7 +76,9 @@ meeting-recorder uninstall   # remove the app; your recordings in ~/Meetings are
 - **Every meeting gets its own summary**, saved in its own folder. Use **Summarize now** on a meeting to make one right away, or **Retry** if it failed (the reason is shown).
 - Transcription quality:
   - Audio is extracted losslessly (16 kHz PCM) before recognition, and recordings use higher-bitrate audio (160 kbps for others, 96 kbps for you).
-  - Echo is removed by sound, not by words: when your mic hears the call through your speakers, those "You" lines rise and fall with the call audio and are dropped, whatever the language or spelling.
+  - **Echo cancellation before transcription:** the call's own audio is the reference. The app finds the speaker-to-mic delay, silences the stretches where your mic only repeats the call, and evens out quiet and loud tracks, so the speech model never hears the echo. With headphones (no echo) nothing is removed. This runs in the after-meeting transcription; the live transcript drops echoed lines instead. (Apple's voice processing can't do this: it only cancels sound the app itself plays, and Chrome plays the call.)
+  - With "Meeting language" on automatic, the language is detected once from the call audio and used for both tracks.
+  - Echo is also removed line by line, by sound rather than words: when your mic hears the call through your speakers, those "You" lines rise and fall with the call audio and are dropped, whatever the language or spelling.
   - Lines over silence (the "Thank you." a speech model invents when nobody speaks) and one-letter fragments are dropped.
   - Short fragments from the same speaker are merged into readable sentences.
   - Pick the **meeting language** in Settings (for example English (India) or Hindi) if it differs from your Mac's language.

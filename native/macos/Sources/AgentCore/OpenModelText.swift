@@ -10,6 +10,13 @@ public enum OpenModelText {
         return String(code)
     }
 
+    /// The language most chunks were detected as (a short "Hello" opening a Hindi call doesn't
+    /// decide it); nil when nothing was detected.
+    public static func majorityLanguage(_ detected: [String]) -> String? {
+        let counts = Dictionary(detected.filter { !$0.isEmpty }.map { ($0, 1) }, uniquingKeysWith: +)
+        return counts.max { $0.value < $1.value || ($0.value == $1.value && $0.key > $1.key) }?.key
+    }
+
     /// Subtitle credits Whisper learned from subtitled videos and inserts over noise or silence.
     /// Removed as exact phrases only (a real "thank you" in a meeting is kept).
     static let subtitleArtifacts = [

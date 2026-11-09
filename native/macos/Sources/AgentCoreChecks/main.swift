@@ -1,6 +1,7 @@
 // Logic checks for AgentCore. The Command Line Tools ship without XCTest/swift-testing, so this is
 // a plain executable: `swift run AgentCoreChecks` (exit 1 on any failure). It decodes the SAME
 // protocol fixtures as the TypeScript tests, so both sides agree on what is valid.
+import AVFoundation
 import AgentCore
 import CoreMedia
 import Foundation
@@ -144,6 +145,7 @@ check(cjk.count >= 3 && cjk.allSatisfy { TranscriptChunker.estimatedTokens($0) <
 
 // MARK: Open-model text
 check(OpenModelText.whisperLanguage("hi_IN") == "hi" && OpenModelText.whisperLanguage("auto") == nil && OpenModelText.whisperLanguage(nil) == nil, "settings language -> Whisper code")
+check(OpenModelText.majorityLanguage(["en", "hi", "hi", ""]) == "hi" && OpenModelText.majorityLanguage([]) == nil, "auto language: majority of the call track, not its first chunk")
 check(OpenModelText.cleanWhisper("<|startoftranscript|><|en|><|0.00|> Good  morning.<|3.52|>") == "Good morning.", "Whisper special tokens stripped")
 check(OpenModelText.cleanWhisper("bye Thank you. Продолжение следует...") == "bye Thank you.", "Whisper subtitle credit removed, real thanks kept")
 check(OpenModelText.cleanWhisper("Thanks for watching!") == "" && OpenModelText.cleanWhisper("Subtitles by the Amara.org community") == "", "subtitle-credit-only lines become empty (then dropped)")
@@ -254,6 +256,66 @@ do {
     check(AudioEvidence.envelope([Float](repeating: 0.1, count: 480), sampleRate: 48_000).count == 1 && abs(AudioEvidence.envelope([0.1, 0.1], sampleRate: 200)[0] + 20) < 0.01, "envelope in dBFS per 10 ms")
 }
 
+// MARK: Echo cancellation before recognition (mask + delay + levels)
+do {
+    // Speech-like loudness: syllable bursts of random length and level (not periodic, like speech).
+    func speech(_ seed: UInt64, frames: Int) -> [Double] {
+        var state = seed &* 6364136223846793005 &+ 1442695040888963407
+        func next() -> Double { state = state &* 6364136223846793005 &+ 1442695040888963407; return Double(state >> 33) / Double(1 << 31) }
+        var out: [Double] = []
+        while out.count < frames {
+            let level = -40 + 30 * next(), length = 5 + Int(next() * 20)
+            out += (0..<length).map { _ in level + 4 * next() }
+            out += Array(repeating: -55 - 10 * next(), count: 2 + Int(next() * 8)) // pause between syllables
+        }
+        return Array(out.prefix(frames))
+    }
+    var call = speech(1, frames: 1000)
+    for i in 500..<1000 { call[i] = -90 }                      // the call goes quiet halfway
+    let own = speech(7, frames: 1000)
+    // Mic: echo of the call (12 frames late, -18 dB) for the first half, then your own voice.
+    var mic = [Double](repeating: -48, count: 1000)         // a normal room: noise around -48 dBFS
+    for i in 12..<500 { mic[i] = max(mic[i], call[i - 12] - 18) } // the echo, above the room noise
+    for i in 500..<1000 { mic[i] = max(mic[i], own[i]) }      // your voice, over the same room noise
+    let (delay, score) = AudioEvidence.bulkDelay(mic: mic, system: call)
+    check(delay == 12 && score >= AudioEvidence.meetingEchoCorrelation, "speaker-to-mic delay found (\(delay) frames, r=\(score))")
+    // Headphones: the mic is only your voice, sometimes over the call. No echo in the meeting.
+    let headphones = (0..<1000).map { i in i % 200 < 60 ? own[i] : -48 }
+    check(AudioEvidence.bulkDelay(mic: headphones, system: call).score < AudioEvidence.meetingEchoCorrelation, "no echo with headphones: nothing masked")
+    let mask = AudioEvidence.echoMask(mic: mic, system: call, delay: delay)
+    // While the call is speaking, its echo on the mic is masked (pauses between syllables are
+    // near-silent on both and don't matter); your own voice later is never masked.
+    // After the 300 ms-stretch rule (what's really silenced), the echo is covered despite the
+    // gaps between the call's syllables; your own voice is never silenced.
+    let silenced = AudioEvidence.stretches(mask)
+    let audible = (60..<440).filter { mic[$0] > -42 }          // echo clearly above the room noise
+    let echoSilenced = audible.filter { silenced[$0] }.count, ownSilenced = silenced[550..<950].filter { $0 }.count
+    check(Double(echoSilenced) >= 0.9 * Double(audible.count) && ownSilenced == 0,
+          "audible echo silenced with room noise (\(echoSilenced)/\(audible.count)), own voice kept (\(ownSilenced))")
+    // Talking over someone: your voice on top of their echo makes the mic louder than the echo.
+    var overlap = mic
+    for i in 200..<300 { overlap[i] = max(overlap[i], own[i] + 10) }
+    let talkOver = AudioEvidence.echoMask(mic: overlap, system: call, delay: delay)
+    check(talkOver[210..<290].filter { $0 }.count < 10, "talking over the call isn't silenced")
+    var quick = mic                                            // a 120 ms "yes" over the call: not bridged over
+    for i in 300..<312 { quick[i] = max(quick[i], own[i] + 10, mic[i] + 15) }
+    let quickSilenced = AudioEvidence.stretches(AudioEvidence.echoMask(mic: quick, system: call, delay: delay))
+    check(!quickSilenced[300..<312].contains(true), "a short word over the call isn't bridged over")
+    let quiet = [Double](repeating: -46, count: 200) + [Double](repeating: -75, count: 30) // a quiet mic: speech at -46 dBFS, quiet room
+    let gain = AudioEvidence.normalizingGain(envelope: quiet)
+    check(abs(20 * log10(Double(gain)) - 12) < 0.01, "a quiet mic is raised, up to +12 dB")
+    let noisy = [Double](repeating: -46, count: 200) + [Double](repeating: -60, count: 30) // room noise at -60
+    check(abs(20 * log10(Double(AudioEvidence.normalizingGain(envelope: noisy))) - 5) < 0.01, "room noise never lifted above -55 dBFS (+5 dB, not +12)")
+    check(abs(20 * log10(Double(AudioEvidence.normalizingGain(envelope: [Double](repeating: -30, count: 200) + [Double](repeating: -80, count: 30), samplePeak: 0.5))) - 5.02) < 0.01,
+          "gain limited by the real sample peak (-6 dBFS peak → +5 dB, not +10)")
+    let choppy = (0..<200).map { $0 % 7 == 0 } + [Bool](repeating: true, count: 40) + [false, true, false]
+    let runs = AudioEvidence.stretches(choppy)
+    check(runs[0..<200].allSatisfy { !$0 } && runs[200..<240].allSatisfy { $0 } && !runs[241], "only whole 300 ms stretches are silenced, never slices inside speech")
+    let loud = [Double](repeating: -6, count: 200)
+    check(AudioEvidence.normalizingGain(envelope: loud) == 1, "loud speech isn't made louder (no clipping)")
+    check(AudioEvidence.normalizingGain(envelope: [Double](repeating: -80, count: 100)) == 1, "silence isn't amplified")
+}
+
 // MARK: Share command
 let shareValidator = CommandValidator()
 if case .success(.share(let c)) = shareValidator.decode(#"{"cmd":"share","meetingId":"2026-11-08_10-00-00_zoom","file":"share.mp4"}"#) { check(c.file == .shareMp4, "share decoded") } else { check(false, "share accepted") }
@@ -292,6 +354,39 @@ let badNode = AgentConfig(nodePath: "/nonexistent/node", daemonEntry: "/x/index.
 FileManager.default.createFile(atPath: "\(home)/agent.json", contents: try! JSONEncoder().encode(badNode))
 check(AgentConfig.load(home: home) == .failure(.notExecutable("/nonexistent/node")), "missing node binary reported")
 try? FileManager.default.removeItem(atPath: home)
+
+// Audio file boundary: levels() and writeCleaned() on a real 16 kHz file (1 s tone at 0.1).
+do {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentcore-audio-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+    let source = dir.appendingPathComponent("in.caf"), target = dir.appendingPathComponent("out.caf")
+    do {
+        let file = try AVAudioFile(forWriting: source, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_000)!
+        buffer.frameLength = 16_000
+        for i in 0..<16_000 { buffer.floatChannelData![0][i] = 0.1 * sin(Float(i) * 0.3) }
+        try file.write(from: buffer)
+    }
+    let levels = AudioFiles.levels(source)
+    check(levels?.envelope.count == 100 && levels?.peaks.count == 100 && abs((levels?.peaks[5] ?? 0) - 0.1) < 0.001,
+          "levels: one envelope frame and one peak per 10 ms")
+    let silence = (0..<100).map { (20..<60).contains($0) }
+    try AudioFiles.writeCleaned(from: source, to: target, gain: 20, silence: silence)
+    let out = try AVAudioFile(forReading: target, commonFormat: .pcmFormatFloat32, interleaved: false)
+    let read = AVAudioPCMBuffer(pcmFormat: out.processingFormat, frameCapacity: 16_000)!
+    var x: [Float] = []
+    while out.framePosition < out.length {
+        try out.read(into: read)
+        x += UnsafeBufferPointer(start: read.floatChannelData![0], count: Int(read.frameLength))
+    }
+    check(x.count == 16_000 && out.length == 16_000, "cleaned track keeps its length (timeline intact: \(x.count), \(out.length))")
+    check(x[3_200..<9_600].allSatisfy { $0 == 0 }, "silenced frames are fully silent")
+    check(x.allSatisfy { abs($0) <= 1 } && x[1_000..<1_100].contains { abs($0) > 0.99 }, "gain applied and clamped to ±1")
+    check(abs(x[3_199]) < 0.05 && abs(x[9_600]) < 0.05 && x[9_664..<9_760].contains { abs($0) > 0.5 },
+          "2 ms fades at the cut, full level right after")
+} catch { check(false, "audio file boundary: \(error)") }
 
 print(failures == 0 ? "AgentCoreChecks OK (\(passed) checks)" : "AgentCoreChecks FAILED: \(failures) of \(passed + failures)")
 exit(failures == 0 ? 0 : 1)

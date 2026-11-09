@@ -147,15 +147,13 @@ func transcribeWithWhisper() async throws -> Transcript {
     try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: scratch) }
     var segments: [Transcript.Segment] = []
-    for (index, track) in audioTracks.enumerated() {
+    let prepared = try await prepareTracks(audioTracks, of: asset, labels: labels, scratch: scratch)
+    for index in audioTracks.indices {
         emit(["percent": index * 100 / audioTracks.count])
-        let pcm: URL
-        do { pcm = try await extractPCM(track, of: asset, to: scratch.appendingPathComponent("track\(index).caf")) }
-        catch { throw StepError(step: "reading audio track \(index + 1)", underlying: error) }
-        do { segments += try await recognizer.recognize(pcm, speaker: labels[index]) }
+        do { segments += try await recognizer.recognize(prepared.cleaned[index], speaker: labels[index]) }
         catch { throw StepError(step: "transcribing audio track \(index + 1)", underlying: error) }
     }
-    let checked = acousticFilter(segments, labels: labels, scratch: scratch)
+    let checked = acousticFilter(segments, prepared: prepared)
     return Transcript(language: recognizer.language ?? "auto", durationSec: duration, segments: TranscriptCleanup.clean(checked))
 }
 
@@ -185,20 +183,18 @@ func transcribe() async throws -> Transcript {
     try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: scratch) }
     var segments: [Transcript.Segment] = []
+    let prepared = try await prepareTracks(audioTracks, of: asset, labels: labels, scratch: scratch)
 
-    for (index, track) in audioTracks.enumerated() {
+    for index in audioTracks.indices {
         let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
         if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
             emit(["status": "downloading-model"])
             try await request.downloadAndInstall()
         }
-        // One track at a time, decoded once to uncompressed 16 kHz mono audio on disk (no second
-        // lossy encode, which hurt accuracy). The analyzer reads it at its own pace: memory stays flat.
-        let exported: URL
-        do { exported = try await extractPCM(track, of: asset, to: scratch.appendingPathComponent("track\(index).caf")) }
-        catch { throw StepError(step: "reading audio track \(index + 1)", underlying: error) }
+        // The cleaned 16 kHz mono copy (echo masked, levels evened out); the analyzer reads it at its
+        // own pace, so memory stays flat.
         let audioFile: AVAudioFile
-        do { audioFile = try AVAudioFile(forReading: exported) }
+        do { audioFile = try AVAudioFile(forReading: prepared.cleaned[index]) }
         catch { throw StepError(step: "opening audio track \(index + 1)", underlying: error) }
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let speaker = labels[index]
@@ -227,7 +223,7 @@ func transcribe() async throws -> Transcript {
         } catch { throw StepError(step: "transcribing audio track \(index + 1)", underlying: error) }
         segments += try await collector.value
     }
-    let checked = acousticFilter(segments, labels: labels, scratch: scratch)
+    let checked = acousticFilter(segments, prepared: prepared)
     return Transcript(language: locale.identifier, durationSec: duration, segments: TranscriptCleanup.clean(checked))
 }
 
@@ -237,25 +233,73 @@ struct StepError: LocalizedError {
     var errorDescription: String? { "\(step): \((underlying as NSError).localizedDescription) (\((underlying as NSError).domain) \((underlying as NSError).code))" }
 }
 
+/// What prepareTracks made: the cleaned files to recognize, and each speaker's envelope before
+/// (for the echo check) and after cleaning (for the silence check: what the recognizer heard).
+struct PreparedTracks {
+    var cleaned: [URL] = []
+    var original: [String: [Double]] = [:]
+    var heard: [String: [Double]] = [:]
+}
+
+/// Echo cancellation and levels BEFORE recognition, using the call audio as the reference (Apple's
+/// voice processing can't: it only cancels audio our own app plays, and Chrome plays the call).
+///   extract both tracks ─▶ envelopes ─▶ speaker-to-mic delay ─▶ silence the mic where it only
+///   echoes the call ─▶ silence long near-silent stretches ─▶ even out each track's speech level
+///   (×1…×4, no clipping) ─▶ trackN.clean.caf
+/// The recognizer never hears the echo, so it can't transcribe it. Originals stay for the checks.
+func prepareTracks(_ tracks: [AVAssetTrack], of asset: AVAsset, labels: [String], scratch: URL) async throws -> PreparedTracks {
+    var originals: [URL] = []
+    for (index, track) in tracks.enumerated() {
+        do { originals.append(try await extractPCM(track, of: asset, to: scratch.appendingPathComponent("track\(index).caf"))) }
+        catch { throw StepError(step: "reading audio track \(index + 1)", underlying: error) }
+    }
+    var levels: [(envelope: [Double], peaks: [Float])] = []
+    for (index, url) in originals.enumerated() {
+        guard let level = AudioFiles.levels(url) else { throw StepError(step: "measuring audio track \(index + 1)", underlying: CocoaError(.fileReadCorruptFile)) }
+        levels.append(level)
+    }
+    let micIndex = labels.firstIndex(of: "You"), callIndex = labels.firstIndex(of: "Others")
+    var echo: [Bool] = []
+    if let micIndex, let callIndex {
+        let mic = levels[micIndex].envelope, call = levels[callIndex].envelope
+        let bulk = AudioEvidence.bulkDelay(mic: mic, system: call)
+        // No echo across the meeting (headphones): mask nothing.
+        if bulk.score >= AudioEvidence.meetingEchoCorrelation {
+            echo = AudioEvidence.stretches(AudioEvidence.echoMask(mic: mic, system: call, delay: bulk.delay))
+        }
+        let frames = echo.filter { $0 }.count // what's really silenced
+        emit(["status": "echo-cancelled", "delayMs": bulk.delay * 10, "correlation": Int(bulk.score * 100),
+              "echoMs": frames * 1000 / AudioEvidence.framesPerSecond])
+    }
+    var prepared = PreparedTracks()
+    for (index, source) in originals.enumerated() {
+        let envelope = levels[index].envelope
+        let quiet = AudioEvidence.stretches(envelope.map { $0 < AudioEvidence.gateDb }, minRun: AudioEvidence.gateMinFrames)
+        let silence = envelope.indices.map { quiet[$0] || (index == micIndex && $0 < echo.count && echo[$0]) }
+        // Loudest sample the recognizer will hear (silenced frames don't limit the gain).
+        let peak = zip(levels[index].peaks, silence).reduce(Float(0)) { $1.1 ? $0 : max($0, $1.0) }
+        let gain = AudioEvidence.normalizingGain(envelope: envelope, mask: silence, samplePeak: peak)
+        if gain == 1, !silence.contains(true) {
+            prepared.cleaned.append(source) // nothing to change
+        } else {
+            let target = scratch.appendingPathComponent("track\(index).clean.caf")
+            do { try AudioFiles.writeCleaned(from: source, to: target, gain: gain, silence: silence) }
+            catch { throw StepError(step: "cleaning audio track \(index + 1)", underlying: error) }
+            try? FileManager.default.removeItem(at: source) // only its envelope is needed from here
+            prepared.cleaned.append(target)
+        }
+        prepared.original[labels[index]] = envelope
+        prepared.heard[labels[index]] = envelope.indices.map { silence[$0] ? -100 : envelope[$0] }
+    }
+    return prepared
+}
+
 /// Drops echo and invented lines by their sound (AudioEvidence), using each track's extracted
 /// 16 kHz PCM (laid out on the recording's timeline, so frame = seconds × 100).
-func acousticFilter(_ segments: [Transcript.Segment], labels: [String], scratch: URL) -> [Transcript.Segment] {
-    /// Read in chunks of whole 10 ms frames, so memory stays flat however long the meeting.
-    func envelope(_ speaker: String) -> [Double]? {
-        guard let index = labels.firstIndex(of: speaker),
-              let file = try? AVAudioFile(forReading: scratch.appendingPathComponent("track\(index).caf"), commonFormat: .pcmFormatFloat32, interleaved: false)
-        else { return nil }
-        let rate = file.processingFormat.sampleRate
-        let frame = AVAudioFrameCount(max(1, Int(rate) / AudioEvidence.framesPerSecond))
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frame * 1_000) else { return nil } // 10 s
-        var result: [Double] = []
-        while file.framePosition < file.length {
-            guard (try? file.read(into: buffer)) != nil, buffer.frameLength > 0, let data = buffer.floatChannelData?[0] else { break }
-            result += AudioEvidence.envelope(Array(UnsafeBufferPointer(start: data, count: Int(buffer.frameLength))), sampleRate: rate)
-        }
-        return result
-    }
-    let kept = AudioEvidence.filter(segments, mic: envelope("You"), system: envelope("Others"))
+func acousticFilter(_ segments: [Transcript.Segment], prepared: PreparedTracks) -> [Transcript.Segment] {
+    // Silence judged on what the recognizer heard (silenced parts removed); echo on the original mic.
+    let kept = AudioEvidence.filter(segments, mic: prepared.original["You"], system: prepared.original["Others"],
+                                    heard: (prepared.heard["You"], prepared.heard["Others"]))
     if kept.count < segments.count { emit(["status": "filtered", "dropped": segments.count - kept.count]) }
     return kept
 }
